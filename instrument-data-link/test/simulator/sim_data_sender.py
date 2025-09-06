@@ -54,7 +54,7 @@ class SimConnectRecvSimObjectData(SimConnectRecv):
     dwentrynumber: int  # Entry number when multiple objects returned
     dwoutof: int       # Total number of objects being returned
     dwDefineCount: int # Number of Define IDs in the data
-    dwData: List[float] # Variable length array of data values
+    dwData: bytes      # Binary data matching the SimVars structure
 
     def pack(self) -> bytes:
         base = super().pack()
@@ -67,8 +67,7 @@ class SimConnectRecvSimObjectData(SimConnectRecv):
                            self.dwentrynumber,
                            self.dwoutof,
                            self.dwDefineCount)
-        data = b''.join(struct.pack('d', d) for d in self.dwData)
-        return base + header + data
+        return base + header + self.dwData
 
 class SimDataSender:
     def __init__(self, host: str = 'localhost', port: int = 52021):
@@ -138,16 +137,26 @@ class SimDataSender:
         self.print_packet(packet, 'Event')
         self.sock.sendto(packet.pack(), self.addr)
 
-    def send_simobject_data(self, data: List[float]) -> None:
-        """Send simulated aircraft data"""
-        print("\nPreparing SimObject Data:")
-        print(f"  Altitude: {data[0]:.1f} ft")
-        print(f"  Heading: {data[1]:.1f}°")
-        print(f"  Airspeed: {data[2]:.1f} knots")
-        print(f"  Vertical Speed: {data[3]:.1f} ft/min")
+    def send_simobject_data(self, data: bytes) -> None:
+        """Send simulated aircraft data
         
-        base_size = 8*6  # Size of SimConnectRecv (12) + SimObjectData header (28)
-        data_size = len(data) * 8  # Each float is 8 bytes
+        Args:
+            data: Binary data matching the SimVars structure
+        """
+        # Extract some key values for display
+        altitude = struct.unpack('d', data[76*8:77*8])[0]  # altAltitude
+        heading = struct.unpack('d', data[79*8:80*8])[0]   # hiHeading
+        airspeed = struct.unpack('d', data[77*8:78*8])[0]  # asiAirspeed
+        vertical_speed = struct.unpack('d', data[80*8:81*8])[0]  # vsiVerticalSpeed
+        
+        print("\nPreparing SimObject Data:")
+        print(f"  Altitude: {altitude:.1f} ft")
+        print(f"  Heading: {heading:.1f}°")
+        print(f"  Airspeed: {airspeed:.1f} knots")
+        print(f"  Vertical Speed: {vertical_speed:.1f} ft/min")
+        
+        base_size = 8*6  # 
+        data_size = len(data)  # Size of the binary data
         packet = SimConnectRecvSimObjectData(
             dwSize=base_size + data_size,
             dwVersion=0,    # Version is usually 0
@@ -158,11 +167,158 @@ class SimDataSender:
             dwFlags=0,
             dwentrynumber=1,
             dwoutof=1,
-            dwDefineCount=len(data),
+            dwDefineCount=data_size // 8,  # Number of doubles
             dwData=data
         )
         self.print_packet(packet, "SimObject Data")
         self.sock.sendto(packet.pack(), self.addr)
+
+    def construct_data(self, altitude: float, heading: float, airspeed: float, vertical_speed: float, bank_angle: float) -> bytes:
+        """Construct the data array matching the SimVars structure in C++.
+        The order must match the variable declarations in simvarDefs.h.
+        String32 variables are allocated 32 bytes each.
+        
+        Args:
+            altitude: Current altitude in feet
+            heading: Current heading in degrees
+            airspeed: Current airspeed in knots
+            vertical_speed: Current vertical speed in feet/min
+            bank_angle: Current bank angle in degrees
+            
+        Returns:
+            bytes: Binary data matching the SimVars structure
+        """
+        # Create a bytearray to store the binary data
+        data = bytearray()
+        
+        # Helper function to add a double to the bytearray
+        def add_double(value: float):
+            data.extend(struct.pack('d', value))
+            
+        # Helper function to add a string32 to the bytearray
+        def add_string32(value: str):
+            # Convert string to bytes, pad with nulls to 32 bytes
+            encoded = value.encode('utf-8')[:32]
+            encoded = encoded.ljust(32, b'\0')
+            data.extend(encoded)
+        
+        # Add connected state
+        add_double(1.0)    # connected
+        
+        # Jetbridge vars
+        for _ in range(16):  # 16 jetbridge variables
+            add_double(0.0)
+        
+        # SwitchBox vars
+        for _ in range(12):  # 4 encoders + 7 buttons + mode + park brake
+            add_double(0.0)
+        
+        # Aircraft identification
+        add_string32('')    # Title (string32)
+        add_double(120.0)   # cruiseSpeed
+        add_double(23.7)    # dcVolts
+        add_double(0.0)     # batteryLoad
+        
+        # Power/Lights panel
+        add_double(0.0)     # lightStates
+        add_double(1.0)     # tfFlapsCount
+        add_double(0.0)     # tfFlapsIndex
+        add_double(1.0)     # parkingBrakeOn
+        add_double(3.0)     # pushbackState
+        add_double(0.0)     # apuStartSwitch
+        add_double(0.0)     # apuPercentRpm
+        
+        # Radio panel
+        add_double(0.0)     # com1Status
+        add_double(1.0)     # com1Transmit
+        add_double(119.225) # com1Freq
+        add_double(124.850) # com1Standby
+        add_double(110.50)  # nav1Freq
+        add_double(113.90)  # nav1Standby
+        add_double(0.0)     # com2Status
+        add_double(0.0)     # com2Transmit
+        add_double(124.850) # com2Freq
+        add_double(124.850) # com2Standby
+        add_double(110.50)  # nav2Freq
+        add_double(113.90)  # nav2Standby
+        add_double(1.0)     # com1Receive
+        add_double(0.0)     # com2Receive
+        add_double(394.0)   # adfFreq
+        add_double(368.0)   # adfStandby
+        add_double(0.0)     # com1Volume
+        add_double(0.0)     # com2Volume
+        add_double(0.0)     # seatBeltsSwitch
+        add_double(0.0)     # transponderState
+        add_double(4608.0)  # transponderCode
+        
+        # Autopilot panel
+        add_double(altitude)        # altAltitude
+        add_double(airspeed)        # asiAirspeed
+        add_double(0.0)             # asiMachSpeed
+        add_double(heading)         # hiHeading
+        add_double(vertical_speed)  # vsiVerticalSpeed
+        add_double(1.0)             # autopilotAvailable
+        add_double(0.0)             # autopilotEngaged
+        add_double(0.0)             # flightDirectorActive
+        add_double(heading)         # autopilotHeading
+        add_double(0.0)             # autopilotHeadingLock
+        add_double(1.0)             # autopilotHeadingSlotIndex
+        add_double(0.0)             # autopilotLevel
+        add_double(altitude)        # autopilotAltitude
+        add_double(altitude)        # autopilotAltitude3
+        add_double(0.0)             # autopilotAltLock
+        add_double(0.0)             # autopilotNav1Lock
+        add_double(0.0)             # gpsDrivesNav1
+        add_double(0.0)             # autopilotPitchHold
+        add_double(vertical_speed)  # autopilotVerticalSpeed
+        add_double(0.0)             # autopilotVerticalHold
+        add_double(1.0)             # autopilotVsSlotIndex
+        add_double(airspeed)        # autopilotAirspeed
+        add_double(0.0)             # autopilotMach
+        add_double(0.0)             # autopilotAirspeedHold
+        add_double(0.0)             # autopilotApproachHold
+        add_double(0.0)             # autopilotGlideslopeHold
+        add_double(0.0)             # throttlePosition
+        add_double(0.0)             # autothrottleActive
+        
+        # Additional instruments
+        add_double(29.92)           # altKollsman
+        add_double(0.0)             # adiPitch
+        add_double(bank_angle)      # adiBank
+        add_double(airspeed)        # asiTrueSpeed
+        add_double(-14.0)           # asiAirspeedCal
+        add_double(heading)         # hiHeadingTrue
+        add_double(altitude)        # altAboveGround
+        add_double(0.0)             # tcRate
+        add_double(0.0)             # tcBall
+        add_double(0.0)             # tfElevatorTrim
+        add_double(0.0)             # tfRudderTrim
+        add_double(0.0)             # tfSpoilersPosition
+        add_double(0.0)             # tfAutoBrake
+        add_double(43200.0)         # dcUtcSeconds
+        add_double(46800.0)         # dcLocalSeconds
+        add_double(0.0)             # dcFlightSeconds
+        add_double(26.2)            # dcTempC
+        add_double(1.0)             # numberOfEngines
+        add_double(0.0)             # rpmEngine
+        add_double(0.0)             # rpmPercent
+        add_double(0.0)             # rpmElapsedTime
+        add_double(50.0)            # fuelCapacity
+        add_double(0.0)             # fuelQuantity
+        add_double(0.0)             # fuelLeftPercent
+        add_double(0.0)             # fuelRightPercent
+        
+        # Add remaining string32 variables
+        add_string32('')            # atcTailNumber
+        add_string32('')            # atcCallSign
+        add_string32('')            # atcFlightNumber
+        
+        # Add remaining doubles
+        add_double(0.0)             # atcHeavy
+        add_double(-999.0)          # landingRate
+        add_double(0.0)             # skytrackState
+        
+        return bytes(data)
 
     def run_test_sequence(self, interval: float = 10.0) -> None:
         """Run a test sequence of data packets"""
@@ -177,31 +333,29 @@ class SimDataSender:
             airspeed = 120.0
             vertical_speed = 0.0
 
-            # while True:
-            #     # Simulate some simple flight dynamics
-            #     altitude += vertical_speed * interval / 60  # Convert from feet/min to feet/interval
-            #     heading = (heading + 1) % 360  # Slowly turn
-            #     airspeed += (random.random() - 0.5) * 2  # Random speed variations
-            #     vertical_speed = math.sin(time.time() / 10) * 500  # Oscillating vertical speed
-
-            #     # Send simulated aircraft data
-            #     data = [
-            #         altitude,        # Altitude (feet)
-            #         heading,         # Heading (degrees)
-            #         airspeed,        # Airspeed (knots)
-            #         vertical_speed,  # Vertical speed (feet/min)
-            #         # Add more simulation variables as needed
-            #     ]
-            #     self.send_simobject_data(data)
-            time.sleep(interval)
-            self.send_event(SIMCONNECT_RECV_ID_EVENT, EVENT_SIM_STOP)
-            print("Sent SIM_STOP event")
-            self.send_event(SIMCONNECT_RECV_ID_QUIT)
-            print("Sent QUIT event")
+            while True:
+                # Simulate some simple flight dynamics
+                altitude += vertical_speed * interval / 60  # Convert from feet/min to feet/interval
+                heading = (heading + 1) % 360  # Slowly turn
+                airspeed += (random.random() - 0.5) * 2  # Random speed variations
+                vertical_speed = math.sin(time.time() / 10) * 500  # Oscillating vertical speed
+                bank_angle = math.sin(time.time() / 10) * 10  # Oscillating bank angle
+                
+                # Construct data array matching the SimVars structure
+                data = self.construct_data(
+                    altitude=altitude,
+                    heading=heading,
+                    airspeed=airspeed,
+                    vertical_speed=vertical_speed,
+                    bank_angle=bank_angle
+                )
+                self.send_simobject_data(data)
+                time.sleep(interval)
+                
         except KeyboardInterrupt:
             print("\nStopping data transmission")
             # Send stop event
-            self.send_event(EVENT_SIM_STOP)
+            self.send_event(SIMCONNECT_RECV_ID_EVENT, EVENT_SIM_STOP)
             print("Sent SIM_STOP event")
             # Send quit event before exiting
             self.send_event(SIMCONNECT_RECV_ID_QUIT)
