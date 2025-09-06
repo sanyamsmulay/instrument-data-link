@@ -9,8 +9,8 @@
 // Basic Windows types for Linux
 typedef void* HANDLE;
 typedef void* HWND;
-typedef unsigned long DWORD;
-typedef unsigned long long UINT64;
+typedef unsigned long DWORD; // TODO: uint32_t - the data packets are becoming unnecessarily long
+typedef unsigned long long UINT64; // TODO: uint64_t
 typedef int BOOL;
 typedef const char* LPCSTR;
 typedef unsigned char BYTE;

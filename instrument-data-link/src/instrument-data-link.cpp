@@ -210,15 +210,64 @@ void pollJetbridge()
 }
 #endif
 
+void printSimConnectData(SIMCONNECT_RECV* pData, DWORD cbData) {
+    printf("\n=== SimConnect Data Received ===\n");
+
+    // Print pData as hexcode
+    printf("Buffer: ");
+    for (int i = 0; i < cbData; i++) {
+        printf("%02x ", ((char*)pData)[i]);
+    }
+    printf("\n");
+
+
+    // Print the size of the pData structure and its components
+    printf("Size of SIMCONNECT_RECV structure: %lu bytes\n", sizeof(SIMCONNECT_RECV));
+    printf("Size of dwSize member: %lu bytes\n", sizeof(pData->dwSize));
+    printf("Size of dwVersion member: %lu bytes\n", sizeof(pData->dwVersion));
+    printf("Size of dwID member: %lu bytes\n", sizeof(pData->dwID));
+
+    printf("Base Structure:\n");
+    printf("  Size: %lu bytes\n", pData->dwSize);
+    printf("  Version: %lu\n", pData->dwVersion);
+    printf("  ID: %lu (Type: %s)\n", pData->dwID,
+        pData->dwID == SIMCONNECT_RECV_ID_NULL ? "NULL" :
+        pData->dwID == SIMCONNECT_RECV_ID_EVENT ? "EVENT" :
+        pData->dwID == SIMCONNECT_RECV_ID_SIMOBJECT_DATA ? "SIMOBJECT_DATA" :
+        pData->dwID == SIMCONNECT_RECV_ID_CLIENT_DATA ? "CLIENT_DATA" :
+        pData->dwID == SIMCONNECT_RECV_ID_QUIT ? "QUIT" : "UNKNOWN");
+    printf("  Total Data Size: %lu bytes\n", cbData);
+    
+    if (pData->dwID == SIMCONNECT_RECV_ID_EVENT) {
+        auto evt = static_cast<SIMCONNECT_RECV_EVENT*>(pData);
+        printf("Event Data:\n");
+        printf("  Group ID: %lu\n", evt->uGroupID);
+        printf("  Event ID: %lu\n", evt->uEventID);
+        printf("  Data: %lu\n", evt->dwData);
+    } else if (pData->dwID == SIMCONNECT_RECV_ID_SIMOBJECT_DATA) {
+        auto objData = static_cast<SIMCONNECT_RECV_SIMOBJECT_DATA*>(pData);
+        printf("SimObject Data:\n");
+        printf("  Request ID: %lu\n", objData->dwRequestID);
+        printf("  Object ID: %lu\n", objData->dwObjectID);
+        printf("  Define ID: %lu\n", objData->dwDefineID);
+        printf("  Flags: %lu\n", objData->dwFlags);
+        printf("  Entry: %lu of %lu\n", objData->dwentrynumber, objData->dwoutof);
+        printf("  Define Count: %lu\n", objData->dwDefineCount);
+    }
+    printf("===========================\n\n");
+    fflush(stdout);
+}
+
 void CALLBACK MyDispatchProc(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
 {
-    printf("MyDispatchProc called\n");
-    fflush(stdout);
+    //printf("MyDispatchProc called\n");
+    //fflush(stdout);
+    //printSimConnectData(pData, cbData);
     
     static int displayDelay = 0;
 
-    printf("Switch on pData->dwID = %lu\n", pData->dwID);
-    fflush(stdout);
+    //printf("Switch on pData->dwID = %lu\n", pData->dwID);
+    //fflush(stdout);
 
     switch (pData->dwID)
     {
@@ -226,8 +275,8 @@ void CALLBACK MyDispatchProc(SIMCONNECT_RECV* pData, DWORD cbData, void* pContex
     {
         SIMCONNECT_RECV_EVENT* evt = (SIMCONNECT_RECV_EVENT*)pData;
 
-        printf("Switch on evt->uEventID = %lu\n", evt->uEventID);
-        fflush(stdout);
+        //printf("Switch on evt->uEventID = %lu\n", evt->uEventID);
+        //fflush(stdout);
 
         switch (evt->uEventID)
         {
@@ -858,6 +907,9 @@ int main(int argc, char* argv[])
 
             if (n > 0) {
                 printf("Connected to simulator\n");
+                // Process the received packet
+                SIMCONNECT_RECV* pData = (SIMCONNECT_RECV*)buffer;
+                MyDispatchProc(pData, n, NULL);
                 init();
                 simVars.connected = 1;
             }
