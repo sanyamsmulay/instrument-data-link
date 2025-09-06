@@ -3,10 +3,47 @@
  * Copyright (c) 2024 Scott Vincent
  */
 
+#ifdef _WIN32
 #include <windows.h>
 #include <tchar.h>
+#include <winsock2.h>
+#include <ws2tcpip.h>
+#include <mmsystem.h>
+#else
+#include <sys/socket.h>
+#include <netinet/in.h>
+#include <arpa/inet.h>
+#include <unistd.h>
+#include <errno.h>
+#include <fcntl.h>
+// Using SIMCONNECT_CLIENTDATA_MAX_SIZE instead of redefining MaxDataSize
+#define SOCKET int
+#define SOCKADDR struct sockaddr
+#define SOCKET_ERROR -1
+#define closesocket close
+#define WSAGetLastError() errno
+#define INVALID_SOCKET -1
+typedef struct sockaddr_in SOCKADDR_IN;
+#define SND_FILENAME 0x00020000L
+#define SND_ASYNC 0x0001
+#define PlaySound(a,b,c) (0)
+#define MAKEWORD(a,b) ((a) | ((b) << 8))
+typedef struct WSAData { unsigned short wVersion; char szDescription[256]; } WSADATA;
+#define WSAStartup(a,b) (0)
+#define WSACleanup() (0)
+#define _strnicmp strncasecmp
+#define _stricmp strcasecmp
+#define __cdecl
+#define Sleep(x) usleep((x)*1000)
+typedef long LONG_PTR;
+typedef long HRESULT;
+typedef void* HWND;
+typedef struct { int left, top, right, bottom; } RECT;
+typedef struct { size_t cbSize; RECT rcWindow; } WINDOWINFO;
+#endif
 #include <stdio.h>
 #include <thread>
+#include <cstring>
 #include "simvarDefs.h"
 #include "LVars-A310.h"
 #include "LVars-Fbw.h"
@@ -21,7 +58,8 @@ const int Port = 52020;
 // Change the next line to false if you always want to send
 // full data across the network rather than deltas.
 const bool UseDeltas = true;
-const int MaxDataSize = 8192;
+//const int MaxDataSize = 8192;
+const int MaxDataSize = SIMCONNECT_CLIENTDATA_MAX_SIZE;
 
 // Uncomment the next line to show network data usage.
 // This should be a lot lower when using deltas.
@@ -174,13 +212,22 @@ void pollJetbridge()
 
 void CALLBACK MyDispatchProc(SIMCONNECT_RECV* pData, DWORD cbData, void* pContext)
 {
+    printf("MyDispatchProc called\n");
+    fflush(stdout);
+    
     static int displayDelay = 0;
+
+    printf("Switch on pData->dwID = %lu\n", pData->dwID);
+    fflush(stdout);
 
     switch (pData->dwID)
     {
     case SIMCONNECT_RECV_ID_EVENT:
     {
         SIMCONNECT_RECV_EVENT* evt = (SIMCONNECT_RECV_EVENT*)pData;
+
+        printf("Switch on evt->uEventID = %lu\n", evt->uEventID);
+        fflush(stdout);
 
         switch (evt->uEventID)
         {
@@ -200,7 +247,7 @@ void CALLBACK MyDispatchProc(SIMCONNECT_RECV* pData, DWORD cbData, void* pContex
 
         default:
         {
-            printf("SimConnect unknown event id: %ld\n", evt->uEventID);
+            printf("SimConnect unknown event id: %d\n", evt->uEventID);
             fflush(stdout);
             break;
         }
@@ -213,11 +260,14 @@ void CALLBACK MyDispatchProc(SIMCONNECT_RECV* pData, DWORD cbData, void* pContex
     {
         auto pObjData = static_cast<SIMCONNECT_RECV_SIMOBJECT_DATA*>(pData);
 
+        printf("Switch on pObjData->dwRequestID = %lu\n", pObjData->dwRequestID);
+        fflush(stdout);
+
         switch (pObjData->dwRequestID)
         {
         case REQ_ID:
         {
-            int dataSize = pObjData->dwSize - ((int)(&pObjData->dwData) - (int)pData);
+            int dataSize = pObjData->dwSize - ((long)(&pObjData->dwData) - (long)pData);
             if (dataSize != varsSize) {
                 printf("Error: SimConnect expected %d bytes but received %d bytes\n", varsSize, dataSize);
                 fflush(stdout);
@@ -500,7 +550,7 @@ void CALLBACK MyDispatchProc(SIMCONNECT_RECV* pData, DWORD cbData, void* pContex
         }
         default:
         {
-            printf("SimConnect unknown request id: %ld\n", pObjData->dwRequestID);
+            printf("SimConnect unknown request id: %d\n", pObjData->dwRequestID);
             fflush(stdout);
             break;
         }
@@ -569,25 +619,37 @@ void addReadDefs()
                 dataLen = 32;
             }
 
+#ifdef _WIN32
+            // Handle string data type
             if (SimConnect_AddToDataDefinition(hSimConnect, DEF_READ_ALL, SimVarDefs[i][0], NULL, dataType) != 0) {
                 printf("Data def failed: %s (string)\n", SimVarDefs[i][0]);
             }
             else {
                 varsSize += dataLen;
             }
+#else
+            // Non-Windows: Just accumulate size for string data
+            varsSize += dataLen;
+#endif
         }
         else if (_stricmp(SimVarDefs[i][1], "jetbridge") == 0) {
             // SimConnect variables start after all Jetbridge variables
             varsStart++;
         }
         else {
-            // Add double (float64)
-            if (SimConnect_AddToDataDefinition(hSimConnect, DEF_READ_ALL, SimVarDefs[i][0], SimVarDefs[i][1]) != 0) {
+            // Handle double (float64) data type
+#ifdef _WIN32
+            // Windows: Add to SimConnect definition
+            if (SimConnect_AddToDataDefinition(hSimConnect, (DWORD)DEF_READ_ALL, SimVarDefs[i][0], SimVarDefs[i][1]) != 0) {
                 printf("Data def failed: %s, %s\n", SimVarDefs[i][0], SimVarDefs[i][1]);
             }
             else {
                 varsSize += sizeof(double);
             }
+#else
+            // Non-Windows: Just accumulate size for double data
+            varsSize += sizeof(double);
+#endif
         }
     }
 }
@@ -599,9 +661,11 @@ void mapEvents()
             break;
         }
 
+#ifdef _WIN32
         if (SimConnect_MapClientEventToSimEvent(hSimConnect, WriteEvents[i].id, WriteEvents[i].name) != 0) {
             printf("Map event failed: %s\n", WriteEvents[i].name);
         }
+#endif
     }
 }
 
@@ -610,10 +674,12 @@ void init()
     addReadDefs();
     mapEvents();
 
+#ifdef _WIN32
     // Start requesting data
     if (SimConnect_RequestDataOnSimObject(hSimConnect, REQ_ID, DEF_READ_ALL, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_VISUAL_FRAME, 0, 0, 0, 0) != 0) {
         printf("Failed to start requesting data\n");
     }
+#endif
 
 #ifdef jetbridgeFallback
     jetbridgeInit(hSimConnect);
@@ -623,12 +689,14 @@ void init()
 void cleanUp()
 {
     if (hSimConnect) {
+#ifdef _WIN32
         if (SimConnect_RequestDataOnSimObject(hSimConnect, REQ_ID, DEF_READ_ALL, SIMCONNECT_OBJECT_ID_USER, SIMCONNECT_PERIOD_NEVER, 0, 0, 0, 0) != 0) {
             printf("Failed to stop requesting data\n");
         }
 
         printf("Disconnecting from MS FS2020\n");
         SimConnect_Close(hSimConnect);
+#endif
     }
 
     if (!quit) {
@@ -643,26 +711,59 @@ void cleanUp()
     printf("Finished\n");
 }
 
+void printEnumValues() {
+    printf("\n=== SimConnect Enum Values ===\n");
+    printf("\nReceive ID Values (SIMCONNECT_RECV_ID):\n");
+    printf("SIMCONNECT_RECV_ID_NULL = %d\n", SIMCONNECT_RECV_ID_NULL);
+    printf("SIMCONNECT_RECV_ID_EVENT = %d\n", SIMCONNECT_RECV_ID_EVENT);
+    printf("SIMCONNECT_RECV_ID_SIMOBJECT_DATA = %d\n", SIMCONNECT_RECV_ID_SIMOBJECT_DATA);
+    printf("SIMCONNECT_RECV_ID_CLIENT_DATA = %d\n", SIMCONNECT_RECV_ID_CLIENT_DATA);
+    printf("SIMCONNECT_RECV_ID_QUIT = %d\n", SIMCONNECT_RECV_ID_QUIT);
+
+    printf("\nEvent Values (used in uEventID):\n");
+    printf("SIM_START = %d\n", SIM_START);
+    printf("SIM_STOP = %d\n", SIM_STOP);
+
+    printf("\nRequest Values:\n");
+    printf("REQ_ID = %d\n", REQ_ID);
+    printf("DEF_READ_ALL = %d\n", DEF_READ_ALL);
+
+    printf("\nJetbridge Values:\n");
+    printf("jetbridge::kDownlinkRequest = %d\n", jetbridge::kDownlinkRequest);
+    printf("===========================\n\n");
+    fflush(stdout);
+}
+
+#ifdef _WIN32
 int __cdecl _tmain(int argc, _TCHAR* argv[])
+#else
+int main(int argc, char* argv[])
+#endif
 {
     printf("Instrument Data Link %s Copyright (c) 2024 Scott Vincent\n", versionString);
+    printEnumValues();
 
     // Yield so server can start
     Sleep(100);
 
+#ifdef _WIN32
     printf("Searching for local MS FS2020...\n");
+#else
+    printf("Waiting for sim data...\n");
+#endif
     simVars.connected = 0;
 
 #ifdef jetbridgeFallback
     std::thread jetbridgeThread(pollJetbridge);
 #endif
-
-    HRESULT result;
-
+    // HRESULT result; // TODO: implement correctly for windows
+    HRESULT result = 0;
     int loopMillis = 10;
     int retryDelay = 0;
-    while (!quit)
-    {
+
+#ifdef _WIN32
+    // Windows implementation using SimConnect
+    while (!quit) {
         if (simVars.connected) {
             result = SimConnect_CallDispatch(hSimConnect, MyDispatchProc, NULL);
             if (result != 0) {
@@ -685,9 +786,92 @@ int __cdecl _tmain(int argc, _TCHAR* argv[])
                 retryDelay = 200;
             }
         }
-
         Sleep(loopMillis);
     }
+#else
+    // Linux implementation using UDP
+    int sockfd;
+    struct sockaddr_in servaddr, cliaddr;
+    char buffer[MaxDataSize];
+
+    // Create UDP socket
+    if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+        printf("Socket creation failed\n");
+        return 1;
+    }
+
+    memset(&servaddr, 0, sizeof(servaddr));
+    memset(&cliaddr, 0, sizeof(cliaddr));
+
+    // Server configuration
+    servaddr.sin_family = AF_INET;
+    servaddr.sin_addr.s_addr = INADDR_ANY;
+    servaddr.sin_port = htons(52021);
+
+    // Bind socket to address
+    if (bind(sockfd, (const struct sockaddr *)&servaddr, sizeof(servaddr)) < 0) {
+        printf("Bind failed\n");
+        close(sockfd);
+        return 1;
+    }
+
+    printf("UDP Server listening on port 52021...\n");
+
+    // Set socket to non-blocking mode
+    int flags = fcntl(sockfd, F_GETFL, 0);
+    fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
+
+    const int MAX_FAILURES = 10;  // Number of consecutive failures before declaring connection lost
+    int failureCount = 0;
+
+    while (!quit) {
+        if (simVars.connected) {
+            // Try to receive data
+            socklen_t len = sizeof(cliaddr);
+            int n = recvfrom(sockfd, buffer, MaxDataSize, 0, 
+                            (struct sockaddr *)&cliaddr, &len);
+
+            if (n > 0) {
+                // Process received data
+                SIMCONNECT_RECV* pData = (SIMCONNECT_RECV*)buffer;
+                MyDispatchProc(pData, n, NULL);
+                failureCount = 0;  // Reset failure counter on successful receive
+            }
+            else if (n < 0 && errno != EAGAIN && errno != EWOULDBLOCK) {
+                failureCount++;
+                if (failureCount >= MAX_FAILURES) {
+                    printf("Connection lost after %d consecutive failures\n", MAX_FAILURES);
+                    simVars.connected = 0;
+                    printf("Waiting for simulator data...\n");
+                    failureCount = 0;  // Reset for next connection
+                }
+            }
+        }
+        else if (retryDelay > 0) {
+            retryDelay--;
+        }
+        else {
+            // Try to receive initial data to establish connection
+            socklen_t len = sizeof(cliaddr);
+            int n = recvfrom(sockfd, buffer, MaxDataSize, 0,
+                            (struct sockaddr *)&cliaddr, &len);
+
+            if (n > 0) {
+                printf("Connected to simulator\n");
+                init();
+                simVars.connected = 1;
+            }
+            else {
+                retryDelay = 200;
+            }
+        }
+
+        usleep(loopMillis * 1000);  // Convert to microseconds
+    }
+
+    // Cleanup
+    close(sockfd);
+#endif
 
 #ifdef jetbridgeFallback
     // Wait for thread to exit
@@ -1144,8 +1328,8 @@ void processRequest(int bytes)
 #ifdef SHOW_NETWORK_USAGE
         networkOut += bytes;
 #endif
-        printf("Client at %s requested %ld bytes instead of %ld bytes\n",
-            inet_ntoa(senderAddr.sin_addr), request.requestedSize, instrumentsDataSize);
+        printf("Client at %s requested %d bytes instead of %ld bytes\n",
+            inet_ntoa(senderAddr.sin_addr), request.requestedSize, (long)instrumentsDataSize);
     }
 }
 
@@ -1173,7 +1357,7 @@ void server()
     addr.sin_port = htons(Port);
 
     if (bind(sockfd, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
-        printf("Server failed to bind to localhost port %d: %ld\n", Port, WSAGetLastError());
+        printf("Server failed to bind to localhost port %d: %d\n", Port, WSAGetLastError());
         exit(1);
     }
 
@@ -1197,7 +1381,9 @@ void server()
         // Wait for instrument panel to poll (non-blocking, 0.5 second timeout)
         int sel = select(FD_SETSIZE, &fds, 0, 0, &timeout);
         if (sel > 0) {
-            bytes = recvfrom(sockfd, (char*)&request, sizeof(request), 0, (SOCKADDR*)&senderAddr, &addrSize);
+            socklen_t socklen = addrSize;
+            bytes = recvfrom(sockfd, (char*)&request, sizeof(request), 0, (SOCKADDR*)&senderAddr, &socklen);
+            addrSize = socklen;
 
 #ifdef SHOW_NETWORK_USAGE
             networkIn += bytes;
@@ -1493,6 +1679,7 @@ void g1000Encoder(int lowerDiff, int upperDiff, int zoomDiff)
 
 void g1000SwapWindows()
 {
+#ifdef _WIN32
     for (HWND hwnd = GetTopWindow(NULL); hwnd != NULL; hwnd = GetNextWindow(hwnd, GW_HWNDNEXT))
     {
         if (!IsWindowVisible(hwnd))
@@ -1518,7 +1705,7 @@ void g1000SwapWindows()
     }
 
     if (!pfdWin || !mfdWin)
-        return;
+        return 1;
 
     WINDOWINFO tempInfo;
     memcpy(&tempInfo, &pfdInfo, sizeof(WINDOWINFO));
@@ -1530,6 +1717,7 @@ void g1000SwapWindows()
     SetWindowPos(mfdWin, NULL, mfdInfo.rcWindow.left, mfdInfo.rcWindow.top, mfdInfo.rcWindow.right - mfdInfo.rcWindow.left, mfdInfo.rcWindow.bottom - mfdInfo.rcWindow.top, flags);
 
     g1000IsPrimary = pfdInfo.rcWindow.top > -100;
+#endif
 }
 
 void g1000EncoderPush(int num)

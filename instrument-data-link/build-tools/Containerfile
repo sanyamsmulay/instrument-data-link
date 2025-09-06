@@ -1,0 +1,115 @@
+FROM ubuntu:22.04
+
+# Set noninteractive installation
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Step 1: Configure multi-architecture support
+# Required for: arm64 and armhf cross-compilation
+# Step 1: Configure multi-architecture support and package sources
+# Required for: arm64 and armhf cross-compilation
+RUN dpkg --add-architecture arm64 && \
+    dpkg --add-architecture armhf && \
+    sed -i 's/deb http/deb [arch=amd64] http/g' /etc/apt/sources.list && \
+    echo 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse' >> /etc/apt/sources.list && \
+    echo 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse' >> /etc/apt/sources.list && \
+    echo 'deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse' >> /etc/apt/sources.list && \
+    echo 'deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse' >> /etc/apt/sources.list && \
+    echo 'deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse' >> /etc/apt/sources.list && \
+    echo 'deb [arch=armhf] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse' >> /etc/apt/sources.list && \
+    apt-get update
+
+# Step 2: Install base development tools
+# Required for: building and compiling code
+RUN apt-get install -y \
+        build-essential \
+        cmake \
+        wget \
+        unzip \
+        g++ \
+        libboost-system-dev=1.74.0.3ubuntu7 \
+        libboost-thread-dev=1.74.0.3ubuntu7 \
+        libboost-regex-dev=1.74.0.3ubuntu7 \
+        libboost-date-time-dev=1.74.0.3ubuntu7 \
+        libssl-dev \
+        zlib1g-dev
+
+# Step 3: Install cross-compilers and architecture-specific libraries
+# Required for: arm64 and armhf builds
+RUN apt-get install -y \
+        gcc-aarch64-linux-gnu \
+        g++-aarch64-linux-gnu \
+        gcc-arm-linux-gnueabihf \
+        g++-arm-linux-gnueabihf \
+        libboost-system-dev:arm64=1.74.0.3ubuntu7 \
+        libboost-thread-dev:arm64=1.74.0.3ubuntu7 \
+        libboost-regex-dev:arm64=1.74.0.3ubuntu7 \
+        libboost-date-time-dev:arm64=1.74.0.3ubuntu7 \
+        libboost-system-dev:armhf=1.74.0.3ubuntu7 \
+        libboost-thread-dev:armhf=1.74.0.3ubuntu7 \
+        libboost-regex-dev:armhf=1.74.0.3ubuntu7 \
+        libboost-date-time-dev:armhf=1.74.0.3ubuntu7 \
+        libssl-dev:arm64 \
+        libssl-dev:armhf \
+        zlib1g-dev:arm64 \
+        zlib1g-dev:armhf
+
+# Step 4: Install Windows cross-compiler
+# Required for: Windows builds
+RUN apt-get install -y \
+        mingw-w64 \
+        g++-mingw-w64-x86-64-posix
+
+# Step 5: Install Windows-specific dependencies
+# Required for: Windows networking support
+WORKDIR /opt/windows
+RUN wget https://github.com/boostorg/boost/releases/download/boost-1.89.0/boost-1.89.0-cmake.tar.gz \
+    && tar xf boost-1.89.0-cmake.tar.gz \
+    && ls -la \
+    && cd boost-1.89.0 \
+    && ./bootstrap.sh --prefix=/usr/x86_64-w64-mingw32 \
+    && echo "using gcc : mingw : x86_64-w64-mingw32-g++-posix ;" >> project-config.jam \
+    && ./b2 toolset=gcc-mingw target-os=windows address-model=64 link=static runtime-link=static --with-system --with-date_time --with-regex --with-thread install \
+    && cd .. \
+    && rm -rf boost-1.89.0 boost-1.89.0-cmake.tar.gz
+
+# Step 6: Install build dependencies
+RUN apt-get install -y \
+    autoconf \
+    automake \
+    bash \
+    bzip2 \
+    g++-multilib \
+    git \
+    libc6-dev-i386 \
+    make \
+    openssl \
+    perl \
+    python3 \
+    sed \
+    unzip \
+    wget \
+    xz-utils
+
+# Final cleanup
+RUN rm -rf /var/lib/apt/lists/*
+
+# Step 7: Configure build environment
+# Required for: build script execution and architecture selection
+WORKDIR /build
+
+# Build configuration
+ARG ARCH=x86_64
+ENV TARGET_ARCH=$ARCH
+
+# Copy and prepare build script
+# Note: Source files will be mounted at runtime
+COPY container-build.sh /build/
+RUN chmod +x /build/container-build.sh
+
+# Default command
+CMD ["/build/container-build.sh"]
+
+# Build instructions:
+# 1. Build image: podman build -t instrument-data-link-builder .
+# 2. Run build:   ./build.sh <arch>
+#    where <arch> is one of: x86_64, arm64, armhf, win64

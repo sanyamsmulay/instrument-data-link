@@ -1,7 +1,9 @@
 #ifndef _JETBRIDGE_H_
 #define _JETBRIDGE_H_
 
+#ifdef _WIN32
 #include <windows.h>
+#endif
 #include <stdio.h>
 #include "simvarDefs.h"
 
@@ -16,7 +18,11 @@
 
 #ifdef jetbridgeFallback
 
+#ifdef _WIN32
 #include "..\jetbridge\Client.h"
+#else
+#include "../jetbridge/Client.h"
+#endif
 
 const char DRONE_CAMERA_FOV[] = "A:DRONE CAMERA FOV, percent";
 

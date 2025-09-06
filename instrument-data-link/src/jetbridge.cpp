@@ -2,11 +2,16 @@
 
 #ifdef jetbridgeFallback
 
+#ifdef _WIN32
 #include "..\jetbridge\Client.h"
+#else
+#include "../jetbridge/Client.h"
+#endif
 #include "LVars-A310.h"
 #include "LVars-Fbw.h"
 #include "LVars-Kodiak100.h"
 #include "LVars-PA28.h"
+#include <cstring>
 
 //#define DEBUG_WRITES
 
@@ -30,7 +35,11 @@ void jetbridgeInit(HANDLE hSimConnect)
 void readJetbridgeVar(const char* var)
 {
     char rpnCode[128];
-    sprintf_s(rpnCode, "(%s)", var);
+#ifdef _WIN32
+    sprintf_s(rpnCode, sizeof(rpnCode), "(%s)", var);
+#else
+    snprintf(rpnCode, sizeof(rpnCode), "(%s)", var);
+#endif
     jetbridgeClient->request(rpnCode);
     //printf("%s\n", rpnCode);
 }
@@ -39,7 +48,11 @@ void writeJetbridgeVar(const char* var, double val)
 {
     // FS2020 uses RPN (Reverse Polish Notation).
     char rpnCode[128];
-    sprintf_s(rpnCode, "%f (>%s)", val, var);
+#ifdef _WIN32
+    sprintf_s(rpnCode, sizeof(rpnCode), "%f (>%s)", val, var);
+#else
+    snprintf(rpnCode, sizeof(rpnCode), "%f (>%s)", val, var);
+#endif
     jetbridgeClient->request(rpnCode);
 #ifdef DEBUG_WRITES
     printf("%s\n", rpnCode);
@@ -49,7 +62,11 @@ void writeJetbridgeVar(const char* var, double val)
 void writeJetbridgeVar(EVENT_ID eventId, double val)
 {
     char rpnCode[128];
-    sprintf_s(rpnCode, "%f (>K:%s)", val, WriteEvents[eventId].name);
+#ifdef _WIN32
+    sprintf_s(rpnCode, sizeof(rpnCode), "%f (>K:%s)", val, WriteEvents[eventId].name);
+#else
+    snprintf(rpnCode, sizeof(rpnCode), "%f (>K:%s)", val, WriteEvents[eventId].name);
+#endif
     jetbridgeClient->request(rpnCode);
 #ifdef DEBUG_WRITES
     printf("%s\n", rpnCode);
@@ -59,7 +76,11 @@ void writeJetbridgeVar(EVENT_ID eventId, double val)
 void writeJetbridgeHvar(const char* var)
 {
     char rpnCode[128];
-    sprintf_s(rpnCode, "(>H:%s)", var);
+#ifdef _WIN32
+    sprintf_s(rpnCode, sizeof(rpnCode), "(>H:%s)", var);
+#else
+    snprintf(rpnCode, sizeof(rpnCode), "(>H:%s)", var);
+#endif
     jetbridgeClient->request(rpnCode);
 #ifdef DEBUG_WRITES
     printf("%s\n", rpnCode);

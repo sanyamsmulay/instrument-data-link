@@ -1,6 +1,10 @@
 #pragma once
 
+#ifdef _WIN32
 #include <Windows.h>
+#else
+#include "../headers/SimConnectTypes.h"
+#endif
 
 #include <future>
 #include <map>
@@ -11,10 +15,10 @@ namespace jetbridge {
 
 class Client {
  private:
-  void* simconnect = 0;
+  HANDLE simconnect = 0;
 
  public:
-  Client(void* simconnect);
+  Client(HANDLE simconnect);
   void request(const char data[]);
 };
 

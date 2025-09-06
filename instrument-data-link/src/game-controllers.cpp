@@ -1,8 +1,11 @@
+#ifdef _WIN32
 #include <windows.h>
 #include <tchar.h>
+#include <regstr.h>
+#endif
 #include <stdio.h>
 #include <thread>
-#include <regstr.h>
+#include <cstring>
 #include "game-controllers.h"
 
 Joystick joystick[MaxJoysticks];
@@ -10,6 +13,7 @@ Joystick joystick[MaxJoysticks];
 static char* getOem(int vid, int pid)
 {
     static char oemName[256];
+#ifdef _WIN32
     DWORD len = sizeof(oemName);
     char regKey[256];
     HKEY hKey;
@@ -23,6 +27,9 @@ static char* getOem(int vid, int pid)
         RegQueryValueExA(hKey, REGSTR_VAL_JOYOEMNAME, 0, 0, (LPBYTE)oemName, &len);
         RegCloseKey(hKey);
     }
+#else
+    strcpy(oemName, "Unknown");
+#endif
 
     return oemName;
 }
@@ -45,6 +52,7 @@ static int getAxisVal(int axisNum, JOYINFOEX* joyInfo)
 
 static void joyInit(int id)
 {
+#ifdef _WIN32
     JOYINFOEX joyInfo;
     joyInfo.dwSize = sizeof(joyInfo);
     joyInfo.dwFlags = JOY_RETURNALL;
@@ -69,10 +77,12 @@ static void joyInit(int id)
     for (int i = 0; i < joystick[id].buttonCount; i++) {
         joystick[id].button[i] = 1;
     }
+#endif
 }
 
 void joyRefresh(int id)
 {
+#ifdef _WIN32
     JOYINFOEX joyInfo;
     joyInfo.dwSize = sizeof(joyInfo);
     joyInfo.dwFlags = JOY_RETURNALL;
@@ -120,10 +130,12 @@ void joyRefresh(int id)
             }
         }
     }
+#endif
 }
 
 void initJoysticks()
 {
+#ifdef _WIN32
     JOYCAPSA joyCaps;
     for (int id = 0; id < MaxJoysticks; id++) {
         joystick[id].initialised = false;
@@ -154,6 +166,7 @@ void initJoysticks()
         joystick[id].zeroed = false;
         joyInit(id);
     }
+#endif
 }
 
 

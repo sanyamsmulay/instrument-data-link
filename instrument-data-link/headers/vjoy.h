@@ -1,7 +1,9 @@
 #ifndef _VJOY_H_
 #define _VJOY_H_
 
+#ifdef _WIN32
 #include <windows.h>
+#endif
 #include <stdio.h>
 
 // Some SimConnect events don't work with certain aircraft

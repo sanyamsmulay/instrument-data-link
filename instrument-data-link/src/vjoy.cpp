@@ -3,6 +3,7 @@
 
 #ifdef vJoyFallback
 
+#ifdef _WIN32
 #include "..\..\vJoy_SDK\inc\public.h"
 #include "..\..\vJoy_SDK\inc\vjoyinterface.h"
 
@@ -13,6 +14,34 @@ bool vJoyInitialised = false;
 int vJoyRetry = 0;
 int vJoyConfiguredButtons;
 int vJoyAxisValue = -1;
+#else
+// Stub implementation for non-Windows platforms
+const char* VJOY_CONFIG_EXE = "";
+
+int vJoyDeviceId = 1;
+bool vJoyInitialised = false;
+int vJoyRetry = 0;
+int vJoyConfiguredButtons = 0;
+int vJoyAxisValue = -1;
+
+// Stub types and functions for non-Windows builds
+typedef int VjdStat;
+#define VJD_STAT_BUSY 1
+#define VJD_STAT_MISS 2
+#define VJD_STAT_OWN 3
+#define VJD_STAT_FREE 4
+#define HID_USAGE_RX 0
+
+inline bool vJoyEnabled() { return false; }
+inline VjdStat GetVJDStatus(int) { return VJD_STAT_MISS; }
+inline bool AcquireVJD(int) { return false; }
+inline int GetVJDButtonNumber(int) { return 0; }
+inline void ResetButtons(int) {}
+inline void ResetVJD(int) {}
+inline void SetBtn(bool, int, int) {}
+inline void SetAxis(int, int, int) {}
+inline void Sleep(int) {}
+#endif
 
 void vJoyInit()
 {

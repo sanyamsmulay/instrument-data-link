@@ -5,3 +5,4 @@ packages
 **/release
 **/x64
 **/SimConnect
+build/
