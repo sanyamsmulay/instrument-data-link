@@ -53,7 +53,8 @@ typedef struct { size_t cbSize; RECT rcWindow; } WINDOWINFO;
 #include "SimConnect.h"
 
  // Data will be served on this port
-const int Port = 52020;
+const int ListenPort = 52021;
+const int ResponsePort = 52020;
 
 // Change the next line to false if you always want to send
 // full data across the network rather than deltas.
@@ -163,7 +164,8 @@ int bytes;
 bool autopilotPanelConnected = false;
 bool radioPanelConnected = false;
 bool lightsPanelConnected = false;
-SOCKET sockfd;
+SOCKET listenSockfd;
+SOCKET responseSockfd;
 sockaddr_in senderAddr;
 int addrSize = sizeof(senderAddr);
 Request request;
@@ -296,7 +298,7 @@ void CALLBACK MyDispatchProc(SIMCONNECT_RECV* pData, DWORD cbData, void* pContex
 
         default:
         {
-            printf("SimConnect unknown event id: %d\n", evt->uEventID);
+            printf("SimConnect unknown event id: %lu\n", evt->uEventID);
             fflush(stdout);
             break;
         }
@@ -316,7 +318,16 @@ void CALLBACK MyDispatchProc(SIMCONNECT_RECV* pData, DWORD cbData, void* pContex
         {
         case REQ_ID:
         {
+            printf("Debug - Size calculation:\n");
+            printf("  pObjData->dwSize: %lu\n", pObjData->dwSize);
+            printf("  &pObjData->dwData: %p\n", &pObjData->dwData);
+            printf("  pData: %p\n", pData);
+            printf("  Offset: %ld\n", (long)(&pObjData->dwData) - (long)pData);
+            printf("  varsSize: %d\n", varsSize);
+            
             int dataSize = pObjData->dwSize - ((long)(&pObjData->dwData) - (long)pData);
+            printf("  dataSize = %d\n", dataSize);
+            
             if (dataSize != varsSize) {
                 printf("Error: SimConnect expected %d bytes but received %d bytes\n", varsSize, dataSize);
                 fflush(stdout);
@@ -599,7 +610,7 @@ void CALLBACK MyDispatchProc(SIMCONNECT_RECV* pData, DWORD cbData, void* pContex
         }
         default:
         {
-            printf("SimConnect unknown request id: %d\n", pObjData->dwRequestID);
+            printf("SimConnect unknown request id: %lu\n", pObjData->dwRequestID);
             fflush(stdout);
             break;
         }
@@ -641,8 +652,15 @@ void addReadDefs()
     varsStart = (double*)&simVars + 1;
     varsSize = 0;
     bool foundInternal = false;
+    
+    //printf("Debug - varsSize calculation:\n");
+    //printf("  simVars address: %p\n", &simVars);
+    //printf("  varsStart: %p\n", varsStart);
+    //printf("  Offset: %ld\n", (long)varsStart - (long)&simVars);
 
     for (int i = 0;; i++) {
+        //printf("varsSize: %d\n", varsSize);
+        //printf("Processing variable %s\n", SimVarDefs[i][0]);
         if (SimVarDefs[i][0] == NULL) {
             break;
         }
@@ -661,6 +679,9 @@ void addReadDefs()
             if (strcmp(SimVarDefs[i][1], "string32") == 0) {
                 dataType = SIMCONNECT_DATATYPE_STRING32;
                 dataLen = 32;
+                //printf("  Found string32 variable: %s\n", SimVarDefs[i][0]);
+                //printf("  Current varsSize: %d\n", varsSize);
+                //printf("  Adding %d bytes\n", dataLen);
             }
             else {
                 printf("Unsupported string type: %s\n", SimVarDefs[i][1]);
@@ -678,12 +699,19 @@ void addReadDefs()
             }
 #else
             // Non-Windows: Just accumulate size for string data
+            //printf("  Adding string data for: %s\n", SimVarDefs[i][0]);
+            //printf("  Current varsSize: %d\n", varsSize);
+            //printf("  Adding %d bytes for string\n", dataLen);
             varsSize += dataLen;
+            //printf("  New varsSize: %d\n", varsSize);
 #endif
         }
         else if (_stricmp(SimVarDefs[i][1], "jetbridge") == 0) {
             // SimConnect variables start after all Jetbridge variables
-            varsStart++;
+            //printf("  Found jetbridge variable: %s\n", SimVarDefs[i][0]);
+            //printf("  Current varsStart: %p\n", varsStart);
+            varsStart++; // Increment pointer to next variable
+            //printf("  New varsStart: %p\n", varsStart);
         }
         else {
             // Handle double (float64) data type
@@ -697,7 +725,11 @@ void addReadDefs()
             }
 #else
             // Non-Windows: Just accumulate size for double data
+            //printf("  Adding double data for: %s\n", SimVarDefs[i][0]);
+            //printf("  Current varsSize: %d\n", varsSize);
+            //printf("  Adding %lu bytes for double\n", sizeof(double));
             varsSize += sizeof(double);
+            //printf("  New varsSize: %d\n", varsSize);
 #endif
         }
     }
@@ -839,36 +871,36 @@ int main(int argc, char* argv[])
     }
 #else
     // Linux implementation using UDP
-    int sockfd;
-    struct sockaddr_in servaddr, cliaddr;
-    char buffer[MaxDataSize];
+    int simDataSockfd;
+    struct sockaddr_in simDataServAddr, simDataCliAddr;
+    char simDataBuffer[MaxDataSize];
 
-    // Create UDP socket
-    if ((sockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
-        printf("Socket creation failed\n");
+    // Create UDP socket for simulator data
+    if ((simDataSockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
+        printf("SimData socket creation failed\n");
         return 1;
     }
 
-    memset(&servaddr, 0, sizeof(servaddr));
-    memset(&cliaddr, 0, sizeof(cliaddr));
+    memset(&simDataServAddr, 0, sizeof(simDataServAddr));
+    memset(&simDataCliAddr, 0, sizeof(simDataCliAddr));
 
-    // Server configuration
-    servaddr.sin_family = AF_INET;
-    servaddr.sin_addr.s_addr = INADDR_ANY;
-    servaddr.sin_port = htons(52021);
+    // SimData server configuration
+    simDataServAddr.sin_family = AF_INET;
+    simDataServAddr.sin_addr.s_addr = INADDR_ANY;
+    simDataServAddr.sin_port = htons(52022);  // Using port 52022 for sim data
 
     // Bind socket to address
-    if (bind(sockfd, (const struct sockaddr *)&servaddr, sizeof(servaddr)) < 0) {
-        printf("Bind failed\n");
-        close(sockfd);
+    if (bind(simDataSockfd, (const struct sockaddr *)&simDataServAddr, sizeof(simDataServAddr)) < 0) {
+        printf("SimData socket bind failed\n");
+        close(simDataSockfd);
         return 1;
     }
 
-    printf("UDP Server listening on port 52021...\n");
+    printf("SimData socket listening on port 52022...\n");
 
     // Set socket to non-blocking mode
-    int flags = fcntl(sockfd, F_GETFL, 0);
-    fcntl(sockfd, F_SETFL, flags | O_NONBLOCK);
+    int flags = fcntl(simDataSockfd, F_GETFL, 0);
+    fcntl(simDataSockfd, F_SETFL, flags | O_NONBLOCK);
 
     const int MAX_FAILURES = 10;  // Number of consecutive failures before declaring connection lost
     int failureCount = 0;
@@ -876,13 +908,13 @@ int main(int argc, char* argv[])
     while (!quit) {
         if (simVars.connected) {
             // Try to receive data
-            socklen_t len = sizeof(cliaddr);
-            int n = recvfrom(sockfd, buffer, MaxDataSize, 0, 
-                            (struct sockaddr *)&cliaddr, &len);
+            socklen_t len = sizeof(simDataCliAddr);
+            int n = recvfrom(simDataSockfd, simDataBuffer, MaxDataSize, 0, 
+                            (struct sockaddr *)&simDataCliAddr, &len);
 
             if (n > 0) {
                 // Process received data
-                SIMCONNECT_RECV* pData = (SIMCONNECT_RECV*)buffer;
+                SIMCONNECT_RECV* pData = (SIMCONNECT_RECV*)simDataBuffer;
                 MyDispatchProc(pData, n, NULL);
                 failureCount = 0;  // Reset failure counter on successful receive
             }
@@ -901,14 +933,14 @@ int main(int argc, char* argv[])
         }
         else {
             // Try to receive initial data to establish connection
-            socklen_t len = sizeof(cliaddr);
-            int n = recvfrom(sockfd, buffer, MaxDataSize, 0,
-                            (struct sockaddr *)&cliaddr, &len);
+            socklen_t len = sizeof(simDataCliAddr);
+            int n = recvfrom(simDataSockfd, simDataBuffer, MaxDataSize, 0,
+                            (struct sockaddr *)&simDataCliAddr, &len);
 
             if (n > 0) {
                 printf("Connected to simulator\n");
                 // Process the received packet
-                SIMCONNECT_RECV* pData = (SIMCONNECT_RECV*)buffer;
+                SIMCONNECT_RECV* pData = (SIMCONNECT_RECV*)simDataBuffer;
                 MyDispatchProc(pData, n, NULL);
                 init();
                 simVars.connected = 1;
@@ -922,7 +954,7 @@ int main(int argc, char* argv[])
     }
 
     // Cleanup
-    close(sockfd);
+    close(simDataSockfd);
 #endif
 
 #ifdef jetbridgeFallback
@@ -960,7 +992,7 @@ void addDeltaString(long offset, char *newVal)
 /// </summary>
 void sendFull(char* prevSimVars, long dataSize)
 {
-    bytes = sendto(sockfd, (char*)&simVars, dataSize, 0, (SOCKADDR*)&senderAddr, addrSize);
+    bytes = sendto(responseSockfd, (char*)&simVars, dataSize, 0, (SOCKADDR*)&senderAddr, addrSize);
 #ifdef SHOW_NETWORK_USAGE
     networkOut += bytes;
 #endif
@@ -1021,11 +1053,11 @@ void sendDelta(char* prevSimVars, long dataSize)
 
     if (deltaSize < dataSize) {
         // Send delta data
-        bytes = sendto(sockfd, (char*)deltaData, deltaSize, 0, (SOCKADDR*)&senderAddr, addrSize);
+        bytes = sendto(responseSockfd, (char*)deltaData, deltaSize, 0, (SOCKADDR*)&senderAddr, addrSize);
     }
     else {
         // Send full data
-        bytes = sendto(sockfd, (char*)&simVars, dataSize, 0, (SOCKADDR*)&senderAddr, addrSize);
+        bytes = sendto(responseSockfd, (char*)&simVars, dataSize, 0, (SOCKADDR*)&senderAddr, addrSize);
     }
 #ifdef SHOW_NETWORK_USAGE
     networkOut += bytes;
@@ -1287,7 +1319,7 @@ void processRequest(int bytes)
                 return;
             }
             EVENT_ID event = getCustomEvent(eventNum);
-            sendto(sockfd, (char*)&event, sizeof(int), 0, (SOCKADDR*)&senderAddr, addrSize);
+            sendto(responseSockfd, (char*)&event, sizeof(int), 0, (SOCKADDR*)&senderAddr, addrSize);
             if (event == EVENT_PUSHBACK_START || event == EVENT_PUSHBACK_STOP) {
                 // Don't return (need to trigger the pushback)
                 request.writeData.eventId = KEY_TOGGLE_PUSHBACK;
@@ -1376,7 +1408,7 @@ void processRequest(int bytes)
     }
     else {
         // Data size mismatch
-        bytes = sendto(sockfd, (char*)&instrumentsDataSize, 4, 0, (SOCKADDR*)&senderAddr, addrSize);
+        bytes = sendto(responseSockfd, (char*)&instrumentsDataSize, 4, 0, (SOCKADDR*)&senderAddr, addrSize);
 #ifdef SHOW_NETWORK_USAGE
         networkOut += bytes;
 #endif
@@ -1387,31 +1419,54 @@ void processRequest(int bytes)
 
 void server()
 {
+    printf("Starting UDP server...\n");
+    fflush(stdout);
+
+#ifdef _WIN32
     WSADATA wsaData;
     int err = WSAStartup(MAKEWORD(2, 2), &wsaData);
     if (err != 0) {
         printf("Failed to initialise Windows Sockets: %d\n", err);
+        fflush(stdout);
         exit(1);
     }
+    printf("Windows Sockets initialized\n");
+    fflush(stdout);
+#endif
 
-    // Create a UDP socket
-    if ((sockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == INVALID_SOCKET) {
-        printf("Server failed to create UDP socket\n");
+    // Create UDP sockets for listening and responding
+#ifdef _WIN32
+    if ((listenSockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == INVALID_SOCKET ||
+        (responseSockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == INVALID_SOCKET) {
+#else
+    if ((listenSockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0 ||
+        (responseSockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) {
+#endif
+        printf("Server failed to create UDP sockets\n");
         exit(1);
     }
 
     int opt = 1;
-    setsockopt(sockfd, SOL_SOCKET, SO_REUSEADDR, (char*)&opt, sizeof(opt));
+    setsockopt(listenSockfd, SOL_SOCKET, SO_REUSEADDR, (char*)&opt, sizeof(opt));
+    setsockopt(responseSockfd, SOL_SOCKET, SO_REUSEADDR, (char*)&opt, sizeof(opt));
 
-    sockaddr_in addr;
-    addr.sin_family = AF_INET;
-    addr.sin_addr.s_addr = INADDR_ANY;
-    addr.sin_port = htons(Port);
+    // Bind listening socket
+    sockaddr_in listenAddr;
+    listenAddr.sin_family = AF_INET;
+    listenAddr.sin_addr.s_addr = INADDR_ANY;
+    listenAddr.sin_port = htons(ListenPort);
 
-    if (bind(sockfd, (sockaddr*)&addr, sizeof(addr)) == SOCKET_ERROR) {
-        printf("Server failed to bind to localhost port %d: %d\n", Port, WSAGetLastError());
+    if (bind(listenSockfd, (sockaddr*)&listenAddr, sizeof(listenAddr)) < 0) {
+#ifdef _WIN32
+        printf("Server failed to bind to localhost port %d: %d\n", ListenPort, WSAGetLastError());
+#else
+        printf("Server failed to bind to localhost port %d: %s\n", ListenPort, strerror(errno));
+#endif
+        fflush(stdout);
         exit(1);
     }
+    printf("Successfully bound to listening port %d\n", ListenPort);
+    fflush(stdout);
 
     deltaData = (char*)malloc(MaxDataSize);
     prevInstrumentsData = (char*)malloc(MaxDataSize);
@@ -1419,7 +1474,7 @@ void server()
     prevRadioData = (char*)malloc(MaxDataSize);
     prevLightsData = (char*)malloc(MaxDataSize);
 
-    printf("Server listening on port %d\n", Port);
+    printf("Server listening on port %d (responses on port %d)\n", ListenPort, ResponsePort);
 
     timeval timeout;
     timeout.tv_sec = 0;
@@ -1428,23 +1483,28 @@ void server()
     while (!quit) {
         fd_set fds;
         FD_ZERO(&fds);
-        FD_SET(sockfd, &fds);
+        FD_SET(listenSockfd, &fds);
 
         // Wait for instrument panel to poll (non-blocking, 0.5 second timeout)
         int sel = select(FD_SETSIZE, &fds, 0, 0, &timeout);
         if (sel > 0) {
             socklen_t socklen = addrSize;
-            bytes = recvfrom(sockfd, (char*)&request, sizeof(request), 0, (SOCKADDR*)&senderAddr, &socklen);
+            bytes = recvfrom(listenSockfd, (char*)&request, sizeof(request), 0, (SOCKADDR*)&senderAddr, &socklen);
+            // Set response port
+            senderAddr.sin_port = htons(ResponsePort);
             addrSize = socklen;
 
 #ifdef SHOW_NETWORK_USAGE
             networkIn += bytes;
 #endif
             if (bytes > 3) {
+                printf("Received %d bytes from %s\n", bytes, inet_ntoa(senderAddr.sin_addr));
+                fflush(stdout);
                 processRequest(bytes);
             }
             else {
                 if (bytes == -1) {
+#ifdef _WIN32
                     int error = WSAGetLastError();
                     if (error == 10040) {
                         printf("Received more than %ld bytes from %s (WSAError = %d)\n", sizeof(request), inet_ntoa(senderAddr.sin_addr), error);
@@ -1452,9 +1512,14 @@ void server()
                     else {
                         printf("Received from %s but WSAError = %d\n", inet_ntoa(senderAddr.sin_addr), error);
                     }
+#else
+                    printf("Receive error from %s: %s\n", inet_ntoa(senderAddr.sin_addr), strerror(errno));
+#endif
+                    fflush(stdout);
                 }
                 else {
                     printf("Received %d bytes from %s - Not a valid request\n", bytes, inet_ntoa(senderAddr.sin_addr));
+                    fflush(stdout);
                 }
                 bytes = SOCKET_ERROR;
             }
@@ -1465,17 +1530,25 @@ void server()
 
         if (bytes == SOCKET_ERROR && active != 0) {
             printf("Waiting for instrument panel to connect\n");
+            fflush(stdout);
             active = 0;
         }
 
 #ifdef SHOW_NETWORK_USAGE
+#ifdef _WIN32
         ULONGLONG now = GetTickCount64();
+#else
+        struct timespec ts;
+        clock_gettime(CLOCK_MONOTONIC, &ts);
+        ULONGLONG now = (ts.tv_sec * 1000ULL) + (ts.tv_nsec / 1000000ULL);
+#endif
         double elapsedMillis = now - networkStart;
         if (elapsedMillis > 2000) {
             if (networkStart > 0) {
                 double kbInPerSec = networkIn / elapsedMillis;
                 double kbOutPerSec = networkOut / elapsedMillis;
                 printf("Network Usage: In = %.2f KB/s, Out = %.2f KB/s\n", kbInPerSec, kbOutPerSec);
+                fflush(stdout);
             }
             networkStart = now;
             networkIn = 0;
@@ -1490,8 +1563,10 @@ void server()
     free(prevRadioData);
     free(prevLightsData);
 
-    closesocket(sockfd);
+    closesocket(listenSockfd);
+    closesocket(responseSockfd);
     printf("Server stopped\n");
+    fflush(stdout);
 }
 
 #ifdef PICO_USB

@@ -70,7 +70,7 @@ class SimConnectRecvSimObjectData(SimConnectRecv):
         return base + header + self.dwData
 
 class SimDataSender:
-    def __init__(self, host: str = 'localhost', port: int = 52021):
+    def __init__(self, host: str = 'localhost', port: int = 52022):
         self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.addr = (host, port)
 
@@ -127,7 +127,7 @@ class SimDataSender:
     def send_event(self, event_type: int, event_id: int = 0, data: int = 0) -> None:
         """Send a simple event packet"""
         packet = SimConnectRecvEvent(
-            dwSize=8*6,      # Should be the calculated size of the structure
+            dwSize=8*10,      # Should be the calculated size of the structure
             dwVersion=0,    # Version is usually 0
             dwID=event_type,
             uGroupID=0,     # Default group
@@ -144,10 +144,17 @@ class SimDataSender:
             data: Binary data matching the SimVars structure
         """
         # Extract some key values for display
-        altitude = struct.unpack('d', data[76*8:77*8])[0]  # altAltitude
-        heading = struct.unpack('d', data[79*8:80*8])[0]   # hiHeading
-        airspeed = struct.unpack('d', data[77*8:78*8])[0]  # asiAirspeed
-        vertical_speed = struct.unpack('d', data[80*8:81*8])[0]  # vsiVerticalSpeed
+        # Note: Each double is 8 bytes, each string32 is 32 bytes
+        # Count carefully through simvarDefs.h to get correct offsets
+        alt_offset = 76  # altAltitude
+        spd_offset = 77  # asiAirspeed
+        hdg_offset = 79  # hiHeading
+        vs_offset = 80   # vsiVerticalSpeed
+        
+        altitude = struct.unpack('d', data[alt_offset*8:(alt_offset+1)*8])[0]
+        airspeed = struct.unpack('d', data[spd_offset*8:(spd_offset+1)*8])[0]
+        heading = struct.unpack('d', data[hdg_offset*8:(hdg_offset+1)*8])[0]
+        vertical_speed = struct.unpack('d', data[vs_offset*8:(vs_offset+1)*8])[0]
         
         print("\nPreparing SimObject Data:")
         print(f"  Altitude: {altitude:.1f} ft")
@@ -155,7 +162,7 @@ class SimDataSender:
         print(f"  Airspeed: {airspeed:.1f} knots")
         print(f"  Vertical Speed: {vertical_speed:.1f} ft/min")
         
-        base_size = 8*6  # 
+        base_size = 8*10  # 
         data_size = len(data)  # Size of the binary data
         packet = SimConnectRecvSimObjectData(
             dwSize=base_size + data_size,
@@ -202,22 +209,26 @@ class SimDataSender:
             encoded = encoded.ljust(32, b'\0')
             data.extend(encoded)
         
+        # commented to only send simConnect variables
         # Add connected state
-        add_double(1.0)    # connected
-        
-        # Jetbridge vars
-        for _ in range(16):  # 16 jetbridge variables
-            add_double(0.0)
+        # add_double(1.0)    # connected
+        # print("added connected, size: ", len(data))
+        # # Jetbridge vars
+        # for _ in range(16):  # 16 jetbridge variables
+        #     add_double(0.0)
+        # print("added jetbridge, size: ", len(data))
         
         # SwitchBox vars
-        for _ in range(12):  # 4 encoders + 7 buttons + mode + park brake
-            add_double(0.0)
+        # for _ in range(13):  # 4 encoders + 7 buttons + mode + park brake
+        #     add_double(0.0)
+        # print("added switchbox, size: ", len(data))
         
         # Aircraft identification
         add_string32('')    # Title (string32)
         add_double(120.0)   # cruiseSpeed
         add_double(23.7)    # dcVolts
         add_double(0.0)     # batteryLoad
+        print("added aircraft identification, size: ", len(data))
         
         # Power/Lights panel
         add_double(0.0)     # lightStates
@@ -227,6 +238,7 @@ class SimDataSender:
         add_double(3.0)     # pushbackState
         add_double(0.0)     # apuStartSwitch
         add_double(0.0)     # apuPercentRpm
+        print("added power/lights panel, size: ", len(data))
         
         # Radio panel
         add_double(0.0)     # com1Status
@@ -250,7 +262,8 @@ class SimDataSender:
         add_double(0.0)     # seatBeltsSwitch
         add_double(0.0)     # transponderState
         add_double(4608.0)  # transponderCode
-        
+        print("added radio panel, size: ", len(data))
+
         # Autopilot panel
         add_double(altitude)        # altAltitude
         add_double(airspeed)        # asiAirspeed
@@ -280,6 +293,7 @@ class SimDataSender:
         add_double(0.0)             # autopilotGlideslopeHold
         add_double(0.0)             # throttlePosition
         add_double(0.0)             # autothrottleActive
+        print("added autopilot panel, size: ", len(data))
         
         # Additional instruments
         add_double(29.92)           # altKollsman
@@ -307,17 +321,69 @@ class SimDataSender:
         add_double(0.0)             # fuelQuantity
         add_double(0.0)             # fuelLeftPercent
         add_double(0.0)             # fuelRightPercent
+        add_double(0.0)             # vor1Obs
+        add_double(0.0)             # vor1RadialError
+        add_double(0.0)             # vor1GlideSlopeError
+        add_double(0.0)             # vor1ToFrom
+        add_double(0.0)             # vor1GlideSlopeFlag
+        add_double(0.0)             # vor2Obs
+        add_double(0.0)             # vor2RadialError
+        add_double(0.0)             # vor2ToFrom
+        add_double(0.0)             # navHasLocalizer
+        add_double(0.0)             # navLocalizer
+        add_double(0.0)             # gpsWpCrossTrk
+        add_double(0.0)             # adfRadial
+        add_double(0.0)             # adfCard
+        add_double(1.0)             # gearRetractable
+        add_double(100.0)           # gearLeftPos
+        add_double(100.0)           # gearCentrePos
+        add_double(100.0)           # gearRightPos
+        add_double(0.0)             # rudderPosition
+        add_double(0.0)             # brakeLeftPedal
+        add_double(0.0)             # brakeRightPedal
+        add_double(0.0)             # oilTemp1
+        add_double(0.0)             # oilTemp2
+        add_double(0.0)             # oilTemp3
+        add_double(0.0)             # oilTemp4
+        add_double(0.0)             # oilPressure1
+        add_double(0.0)             # oilPressure2
+        add_double(0.0)             # oilPressure3
+        add_double(0.0)             # oilPressure4
+        add_double(0.0)             # exhaustGasTemp1
+        add_double(0.0)             # exhaustGasTemp2
+        add_double(0.0)             # exhaustGasTemp3
+        add_double(0.0)             # exhaustGasTemp4
+        add_double(0.0)             # engineType
+        add_double(0.0)             # engineMaxRpm
+        add_double(0.0)             # turbineEngine1N1
+        add_double(0.0)             # turbineEngine2N1
+        add_double(0.0)             # turbineEngine3N1
+        add_double(0.0)             # turbineEngine4N1
+        add_double(0.0)             # propRpm
+        add_double(0.0)             # engineManifoldPressure
+        add_double(0.0)             # engineFuelFlow1
+        add_double(0.0)             # engineFuelFlow2
+        add_double(0.0)             # engineFuelFlow3
+        add_double(0.0)             # engineFuelFlow4
+        add_double(1.0)             # suctionPressure
+        add_double(0.0)             # onGround
+        add_double(0.0)             # gForce
+        print("added additional instruments, size: ", len(data))
         
         # Add remaining string32 variables
         add_string32('')            # atcTailNumber
         add_string32('')            # atcCallSign
         add_string32('')            # atcFlightNumber
+        add_double(0.0)             # atcHeavy
+        print("added remaining string32 variables, size: ", len(data))
         
         # Add remaining doubles
-        add_double(0.0)             # atcHeavy
-        add_double(-999.0)          # landingRate
-        add_double(0.0)             # skytrackState
-        
+        # internal variables - not including for now
+        # add_double(-999.0)          # landingRate
+        # add_double(0.0)             # skytrackState
+        print("added remaining doubles, size: ", len(data))
+
+        print("Data size: ", len(data))
         return bytes(data)
 
     def run_test_sequence(self, interval: float = 10.0) -> None:
@@ -334,6 +400,7 @@ class SimDataSender:
             vertical_speed = 0.0
 
             while True:
+                print("Sim step")
                 # Simulate some simple flight dynamics
                 altitude += vertical_speed * interval / 60  # Convert from feet/min to feet/interval
                 heading = (heading + 1) % 360  # Slowly turn
