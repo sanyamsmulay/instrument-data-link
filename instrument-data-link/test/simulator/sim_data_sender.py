@@ -432,8 +432,8 @@ def main():
     parser = argparse.ArgumentParser(description='Send simulated flight data')
     parser.add_argument('--host', default='localhost',
                       help='Target host (default: localhost)')
-    parser.add_argument('--port', type=int, default=52021,
-                      help='Target port (default: 52021)')
+    parser.add_argument('--port', type=int, default=52022,
+                      help='Target port (default: 52022)')
     parser.add_argument('--interval', type=float, default=1.0,
                       help='Data send interval in seconds (default: 0.1)')
     

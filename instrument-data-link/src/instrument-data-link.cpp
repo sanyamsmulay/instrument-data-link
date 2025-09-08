@@ -53,8 +53,9 @@ typedef struct { size_t cbSize; RECT rcWindow; } WINDOWINFO;
 #include "SimConnect.h"
 
  // Data will be served on this port
-const int ListenPort = 52021;
-const int ResponsePort = 52020;
+const int InstrumentListenPort = 52021;  // Port for instrument panel requests
+const int InstrumentResponsePort = 52020;  // Port for instrument panel responses
+const int SimDataPort = 52022;  // Port for simulator data
 
 // Change the next line to false if you always want to send
 // full data across the network rather than deltas.
@@ -164,8 +165,8 @@ int bytes;
 bool autopilotPanelConnected = false;
 bool radioPanelConnected = false;
 bool lightsPanelConnected = false;
-SOCKET listenSockfd;
-SOCKET responseSockfd;
+SOCKET instrumentListenSockfd;  // Socket for receiving instrument panel requests
+SOCKET instrumentResponseSockfd;  // Socket for sending responses to instrument panel
 sockaddr_in senderAddr;
 int addrSize = sizeof(senderAddr);
 Request request;
@@ -822,6 +823,8 @@ int main(int argc, char* argv[])
 #endif
 {
     printf("Instrument Data Link %s Copyright (c) 2024 Scott Vincent\n", versionString);
+    printf("Instruments Data Size: %ld bytes\n", instrumentsDataSize);
+    fflush(stdout);
     printEnumValues();
 
     // Yield so server can start
@@ -872,47 +875,64 @@ int main(int argc, char* argv[])
 #else
     // Linux implementation using UDP
     int simDataSockfd;
-    struct sockaddr_in simDataServAddr, simDataCliAddr;
+    struct sockaddr_in simDataAddr;
     char simDataBuffer[MaxDataSize];
 
     // Create UDP socket for simulator data
     if ((simDataSockfd = socket(AF_INET, SOCK_DGRAM, 0)) < 0) {
         printf("SimData socket creation failed\n");
+        fflush(stdout);
         return 1;
     }
 
-    memset(&simDataServAddr, 0, sizeof(simDataServAddr));
-    memset(&simDataCliAddr, 0, sizeof(simDataCliAddr));
-
-    // SimData server configuration
-    simDataServAddr.sin_family = AF_INET;
-    simDataServAddr.sin_addr.s_addr = INADDR_ANY;
-    simDataServAddr.sin_port = htons(52022);  // Using port 52022 for sim data
-
-    // Bind socket to address
-    if (bind(simDataSockfd, (const struct sockaddr *)&simDataServAddr, sizeof(simDataServAddr)) < 0) {
-        printf("SimData socket bind failed\n");
+    // Set socket to non-blocking mode
+    int flags = fcntl(simDataSockfd, F_GETFL, 0);
+    if (flags < 0 || fcntl(simDataSockfd, F_SETFL, flags | O_NONBLOCK) < 0) {
+        printf("Failed to set sim data socket to non-blocking mode\n");
+        fflush(stdout);
         close(simDataSockfd);
         return 1;
     }
 
-    printf("SimData socket listening on port 52022...\n");
+    // Configure sim data socket
+    memset(&simDataAddr, 0, sizeof(simDataAddr));
+    simDataAddr.sin_family = AF_INET;
+    simDataAddr.sin_addr.s_addr = INADDR_ANY;
+    simDataAddr.sin_port = htons(SimDataPort);
 
-    // Set socket to non-blocking mode
-    int flags = fcntl(simDataSockfd, F_GETFL, 0);
-    fcntl(simDataSockfd, F_SETFL, flags | O_NONBLOCK);
+    // Set socket reuse option
+    int reuse = 1;
+    if (setsockopt(simDataSockfd, SOL_SOCKET, SO_REUSEADDR, (const char*)&reuse, sizeof(reuse)) < 0) {
+        printf("Failed to set SO_REUSEADDR on sim data socket\n");
+        fflush(stdout);
+        close(simDataSockfd);
+        return 1;
+    }
+
+    // Bind sim data socket
+    if (bind(simDataSockfd, (const struct sockaddr *)&simDataAddr, sizeof(simDataAddr)) < 0) {
+        printf("SimData socket bind failed: %s\n", strerror(errno));
+        fflush(stdout);
+        close(simDataSockfd);
+        return 1;
+    }
+
+    printf("SimData socket listening on port %d...\n", SimDataPort);
+    fflush(stdout);
 
     const int MAX_FAILURES = 10;  // Number of consecutive failures before declaring connection lost
     int failureCount = 0;
 
     while (!quit) {
         if (simVars.connected) {
-            // Try to receive data
-            socklen_t len = sizeof(simDataCliAddr);
+            // Try to receive simulator data
+            socklen_t len = sizeof(simDataAddr);
             int n = recvfrom(simDataSockfd, simDataBuffer, MaxDataSize, 0, 
-                            (struct sockaddr *)&simDataCliAddr, &len);
+                            (struct sockaddr *)&simDataAddr, &len);
 
             if (n > 0) {
+                printf("Received %d bytes of sim data\n", n);
+                fflush(stdout);
                 // Process received data
                 SIMCONNECT_RECV* pData = (SIMCONNECT_RECV*)simDataBuffer;
                 MyDispatchProc(pData, n, NULL);
@@ -922,8 +942,10 @@ int main(int argc, char* argv[])
                 failureCount++;
                 if (failureCount >= MAX_FAILURES) {
                     printf("Connection lost after %d consecutive failures\n", MAX_FAILURES);
+                    fflush(stdout);
                     simVars.connected = 0;
                     printf("Waiting for simulator data...\n");
+                    fflush(stdout);
                     failureCount = 0;  // Reset for next connection
                 }
             }
@@ -933,9 +955,9 @@ int main(int argc, char* argv[])
         }
         else {
             // Try to receive initial data to establish connection
-            socklen_t len = sizeof(simDataCliAddr);
-            int n = recvfrom(simDataSockfd, simDataBuffer, MaxDataSize, 0,
-                            (struct sockaddr *)&simDataCliAddr, &len);
+            socklen_t len = sizeof(simDataAddr);
+            int n = recvfrom(simDataSockfd, simDataBuffer, MaxDataSize, 0, 
+                            (struct sockaddr *)&simDataAddr, &len);
 
             if (n > 0) {
                 printf("Connected to simulator\n");
@@ -992,7 +1014,7 @@ void addDeltaString(long offset, char *newVal)
 /// </summary>
 void sendFull(char* prevSimVars, long dataSize)
 {
-    bytes = sendto(responseSockfd, (char*)&simVars, dataSize, 0, (SOCKADDR*)&senderAddr, addrSize);
+    bytes = sendto(instrumentResponseSockfd, (char*)&simVars, dataSize, 0, (SOCKADDR*)&senderAddr, addrSize);
 #ifdef SHOW_NETWORK_USAGE
     networkOut += bytes;
 #endif
@@ -1053,11 +1075,11 @@ void sendDelta(char* prevSimVars, long dataSize)
 
     if (deltaSize < dataSize) {
         // Send delta data
-        bytes = sendto(responseSockfd, (char*)deltaData, deltaSize, 0, (SOCKADDR*)&senderAddr, addrSize);
+        bytes = sendto(instrumentResponseSockfd, (char*)deltaData, deltaSize, 0, (SOCKADDR*)&senderAddr, addrSize);
     }
     else {
         // Send full data
-        bytes = sendto(responseSockfd, (char*)&simVars, dataSize, 0, (SOCKADDR*)&senderAddr, addrSize);
+        bytes = sendto(instrumentResponseSockfd, (char*)&simVars, dataSize, 0, (SOCKADDR*)&senderAddr, addrSize);
     }
 #ifdef SHOW_NETWORK_USAGE
     networkOut += bytes;
@@ -1319,7 +1341,7 @@ void processRequest(int bytes)
                 return;
             }
             EVENT_ID event = getCustomEvent(eventNum);
-            sendto(responseSockfd, (char*)&event, sizeof(int), 0, (SOCKADDR*)&senderAddr, addrSize);
+            sendto(instrumentResponseSockfd, (char*)&event, sizeof(int), 0, (SOCKADDR*)&senderAddr, addrSize);
             if (event == EVENT_PUSHBACK_START || event == EVENT_PUSHBACK_STOP) {
                 // Don't return (need to trigger the pushback)
                 request.writeData.eventId = KEY_TOGGLE_PUSHBACK;
@@ -1408,7 +1430,7 @@ void processRequest(int bytes)
     }
     else {
         // Data size mismatch
-        bytes = sendto(responseSockfd, (char*)&instrumentsDataSize, 4, 0, (SOCKADDR*)&senderAddr, addrSize);
+        bytes = sendto(instrumentResponseSockfd, (char*)&instrumentsDataSize, 4, 0, (SOCKADDR*)&senderAddr, addrSize);
 #ifdef SHOW_NETWORK_USAGE
         networkOut += bytes;
 #endif
@@ -1434,38 +1456,40 @@ void server()
     fflush(stdout);
 #endif
 
-    // Create UDP sockets for listening and responding
+    // Create UDP sockets for instrument panel communication
 #ifdef _WIN32
-    if ((listenSockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == INVALID_SOCKET ||
-        (responseSockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == INVALID_SOCKET) {
+    if ((instrumentListenSockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == INVALID_SOCKET ||
+        (instrumentResponseSockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) == INVALID_SOCKET) {
 #else
-    if ((listenSockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0 ||
-        (responseSockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) {
+    if ((instrumentListenSockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0 ||
+        (instrumentResponseSockfd = socket(AF_INET, SOCK_DGRAM, IPPROTO_UDP)) < 0) {
 #endif
         printf("Server failed to create UDP sockets\n");
         exit(1);
     }
 
     int opt = 1;
-    setsockopt(listenSockfd, SOL_SOCKET, SO_REUSEADDR, (char*)&opt, sizeof(opt));
-    setsockopt(responseSockfd, SOL_SOCKET, SO_REUSEADDR, (char*)&opt, sizeof(opt));
+    setsockopt(instrumentListenSockfd, SOL_SOCKET, SO_REUSEADDR, (char*)&opt, sizeof(opt));
+    setsockopt(instrumentResponseSockfd, SOL_SOCKET, SO_REUSEADDR, (char*)&opt, sizeof(opt));
 
-    // Bind listening socket
-    sockaddr_in listenAddr;
-    listenAddr.sin_family = AF_INET;
-    listenAddr.sin_addr.s_addr = INADDR_ANY;
-    listenAddr.sin_port = htons(ListenPort);
+    // Bind instrument listening socket
+    sockaddr_in instrumentListenAddr;
+    instrumentListenAddr.sin_family = AF_INET;
+    instrumentListenAddr.sin_addr.s_addr = INADDR_ANY;
+    instrumentListenAddr.sin_port = htons(InstrumentListenPort);
 
-    if (bind(listenSockfd, (sockaddr*)&listenAddr, sizeof(listenAddr)) < 0) {
+    // Bind instrument panel socket
+    if (bind(instrumentListenSockfd, (sockaddr*)&instrumentListenAddr, sizeof(instrumentListenAddr)) < 0) {
 #ifdef _WIN32
-        printf("Server failed to bind to localhost port %d: %d\n", ListenPort, WSAGetLastError());
+        printf("Server failed to bind to instrument port %d: %d\n", InstrumentListenPort, WSAGetLastError());
 #else
-        printf("Server failed to bind to localhost port %d: %s\n", ListenPort, strerror(errno));
+        printf("Server failed to bind to instrument port %d: %s\n", InstrumentListenPort, strerror(errno));
 #endif
         fflush(stdout);
         exit(1);
     }
-    printf("Successfully bound to listening port %d\n", ListenPort);
+    
+    printf("Successfully bound to instrument port %d (responses on port %d)\n", InstrumentListenPort, InstrumentResponsePort);
     fflush(stdout);
 
     deltaData = (char*)malloc(MaxDataSize);
@@ -1474,7 +1498,8 @@ void server()
     prevRadioData = (char*)malloc(MaxDataSize);
     prevLightsData = (char*)malloc(MaxDataSize);
 
-    printf("Server listening on port %d (responses on port %d)\n", ListenPort, ResponsePort);
+    printf("Server listening for instruments on port %d (responses on port %d)\n", 
+           InstrumentListenPort, InstrumentResponsePort);
 
     timeval timeout;
     timeout.tv_sec = 0;
@@ -1483,15 +1508,23 @@ void server()
     while (!quit) {
         fd_set fds;
         FD_ZERO(&fds);
-        FD_SET(listenSockfd, &fds);
+        FD_SET(instrumentListenSockfd, &fds);
 
         // Wait for instrument panel to poll (non-blocking, 0.5 second timeout)
         int sel = select(FD_SETSIZE, &fds, 0, 0, &timeout);
         if (sel > 0) {
             socklen_t socklen = addrSize;
-            bytes = recvfrom(listenSockfd, (char*)&request, sizeof(request), 0, (SOCKADDR*)&senderAddr, &socklen);
+            bytes = recvfrom(instrumentListenSockfd, (char*)&request, sizeof(request), 0, (SOCKADDR*)&senderAddr, &socklen);
+            
+            printf("Instrument request received:");
+            for (int i = 0; i < bytes; i++) {
+                printf(" %02x", ((unsigned char*)&request)[i]);
+            }
+            printf("\n");
+            fflush(stdout);
+
             // Set response port
-            senderAddr.sin_port = htons(ResponsePort);
+            senderAddr.sin_port = htons(InstrumentResponsePort);
             addrSize = socklen;
 
 #ifdef SHOW_NETWORK_USAGE
@@ -1563,8 +1596,8 @@ void server()
     free(prevRadioData);
     free(prevLightsData);
 
-    closesocket(listenSockfd);
-    closesocket(responseSockfd);
+    closesocket(instrumentListenSockfd);
+    closesocket(instrumentResponseSockfd);
     printf("Server stopped\n");
     fflush(stdout);
 }
