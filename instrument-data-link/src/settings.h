@@ -4,19 +4,19 @@
 
 struct DataLinkSettings {
     std::string host;
-    int port;
+    int instrumentListenPort;
+    int simulatorListenPort;
     int dataRateFps;
 };
 
 struct InstrumentPanelSettings {
     std::string host;
     int listenPort;
-    int responsePort;
 };
 
 struct SimulatorDataSettings {
     std::string host;
-    int port;
+    int simulatorListenPort;
 };
 
 struct AppSettings {

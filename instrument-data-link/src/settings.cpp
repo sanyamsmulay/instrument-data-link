@@ -50,8 +50,10 @@ bool SettingsManager::parseJson(const std::string& jsonContent, AppSettings& set
         if (currentSection == "DataLink") {
             if (key == "Host") {
                 settings.dataLink.host = value;
-            } else if (key == "Port") {
-                settings.dataLink.port = std::stoi(value);
+            } else if (key == "Instrument Listen Port") {
+                settings.dataLink.instrumentListenPort = std::stoi(value);
+            } else if (key == "Simulator Listen Port") {
+                settings.dataLink.simulatorListenPort = std::stoi(value);
             } else if (key == "Data Rate FPS") {
                 settings.dataLink.dataRateFps = std::stoi(value);
             }
@@ -60,14 +62,12 @@ bool SettingsManager::parseJson(const std::string& jsonContent, AppSettings& set
                 settings.instrumentPanel.host = value;
             } else if (key == "Listen Port") {
                 settings.instrumentPanel.listenPort = std::stoi(value);
-            } else if (key == "Response Port") {
-                settings.instrumentPanel.responsePort = std::stoi(value);
             }
         } else if (currentSection == "SimulatorData") {
             if (key == "Host") {
                 settings.simulatorData.host = value;
-            } else if (key == "Port") {
-                settings.simulatorData.port = std::stoi(value);
+            } else if (key == "Simulator Listen Port") {
+                settings.simulatorData.simulatorListenPort = std::stoi(value);
             }
         }
     }
@@ -106,6 +106,17 @@ bool SettingsManager::loadSettings(const std::string& filePath, AppSettings& set
         bool result = parseJson(content, settings);
         if (result) {
             printf("Settings loaded from: %s\n", filePath.c_str());
+            printf("Configuration:\n");
+            printf("  Data Link:\n");
+            printf("    Host: %s\n", settings.dataLink.host.c_str());
+            printf("    Instrument Listen Port: %d\n", settings.dataLink.instrumentListenPort);
+            printf("    Simulator Listen Port: %d\n", settings.dataLink.simulatorListenPort);
+            printf("  Instrument Panel:\n");
+            printf("    Host: %s\n", settings.instrumentPanel.host.c_str());
+            printf("    Listen Port: %d\n", settings.instrumentPanel.listenPort);
+            printf("  Simulator Data:\n");
+            printf("    Host: %s\n", settings.simulatorData.host.c_str());
+            printf("    Simulator Listen Port: %d\n", settings.simulatorData.simulatorListenPort);
         }
         return result;
     } catch (const std::exception& e) {
@@ -121,17 +132,17 @@ AppSettings SettingsManager::getDefaultSettings() {
     
     // Data Link defaults
     settings.dataLink.host = "127.0.0.1"; // default to localhost
-    settings.dataLink.port = 52021;
-    settings.dataLink.dataRateFps = 1;
+    settings.dataLink.instrumentListenPort = 52021;
+    settings.dataLink.simulatorListenPort = 52022;
+    settings.dataLink.dataRateFps = 10;
     
     // Instrument Panel defaults
     settings.instrumentPanel.host = "127.0.0.1"; // default to localhost
     settings.instrumentPanel.listenPort = 52021;
-    settings.instrumentPanel.responsePort = 52020;
     
     // Simulator Data defaults
     settings.simulatorData.host = "127.0.0.1";
-    settings.simulatorData.port = 52022;
+    settings.simulatorData.simulatorListenPort = 52023;
     
     return settings;
 }

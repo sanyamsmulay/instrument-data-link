@@ -53,10 +53,11 @@ typedef struct { size_t cbSize; RECT rcWindow; } WINDOWINFO;
 #include "SimConnect.h"
 #include "settings.h"
 
- // Data will be served on this port - loaded from settings
-int InstrumentListenPort = 52021;  // Port for instrument panel requests
-int InstrumentResponsePort = 52020;  // Port for instrument panel responses
-int SimDataPort = 52022;  // Port for simulator data
+// Data will be served on these ports - loaded from settings
+int DataLinkInstrumentListenPort;  // Port on data link to listen for instrument panel requests
+int DataLinkSimDataListenPort;  // Port on data link to listen for simulator data
+int InstrumentPanelListenPort;  // Port on instrument panel to send responses to
+// will be set from settings.cpp - getDefaultSettings()
 
 // Settings
 AppSettings appSettings;
@@ -764,18 +765,12 @@ void loadAppSettings()
     } else {
         printf("Using default settings\n");
     }
-    
+
     // Apply settings to global variables
-    InstrumentListenPort = appSettings.instrumentPanel.listenPort;
-    InstrumentResponsePort = appSettings.instrumentPanel.responsePort;
-    SimDataPort = appSettings.simulatorData.port;
+    DataLinkInstrumentListenPort = appSettings.dataLink.instrumentListenPort;
+    DataLinkSimDataListenPort = appSettings.dataLink.simulatorListenPort;
+    InstrumentPanelListenPort = appSettings.instrumentPanel.listenPort;
     
-    printf("Configuration:\n");
-    printf("  Instrument Panel Host: %s\n", appSettings.instrumentPanel.host.c_str());
-    printf("  Instrument Listen Port: %d\n", InstrumentListenPort);
-    printf("  Instrument Response Port: %d\n", InstrumentResponsePort);
-    printf("  Simulator Data Host: %s:%d\n", appSettings.simulatorData.host.c_str(), appSettings.simulatorData.port);
-    printf("  Data Link Host: %s:%d\n", appSettings.dataLink.host.c_str(), appSettings.dataLink.port);
     fflush(stdout);
 }
 
@@ -859,15 +854,13 @@ int main(int argc, char* argv[])
     printf("Instruments Data Size: %ld bytes\n", instrumentsDataSize);
     fflush(stdout);
     
-    printEnumValues();
+    //printEnumValues();
     
     // Initialize settings and variables first
     init();
     
     // Create and start server thread
     serverThread = new std::thread(server);
-    
-    printEnumValues();
 
 #ifdef _WIN32
     printf("Searching for local MS FS2020...\n");
@@ -944,7 +937,7 @@ int main(int argc, char* argv[])
         return 1;
     }
     simDataAddr.sin_addr.s_addr = addr;
-    simDataAddr.sin_port = htons(SimDataPort);
+    simDataAddr.sin_port = htons(DataLinkSimDataListenPort);
 
     // Set socket reuse option
     int reuse = 1;
@@ -963,7 +956,7 @@ int main(int argc, char* argv[])
         return 1;
     }
 
-    printf("SimData socket listening on port %d...\n", SimDataPort);
+    printf("SimData socket listening at %s:%d \n", appSettings.simulatorData.host.c_str(), DataLinkSimDataListenPort);
     fflush(stdout);
 
     const int MAX_FAILURES = 10;  // Number of consecutive failures before declaring connection lost
@@ -1521,27 +1514,27 @@ void server()
     // Bind instrument listening socket
     sockaddr_in instrumentListenAddr;
     instrumentListenAddr.sin_family = AF_INET;
-    in_addr_t instr_addr = inet_addr(appSettings.instrumentPanel.host.c_str());
+    in_addr_t instr_addr = inet_addr(appSettings.dataLink.host.c_str());
     if (instr_addr == INADDR_NONE) {
-        printf("Invalid instrument panel host address: %s\n", appSettings.instrumentPanel.host.c_str());
+        printf("Invalid data link host address: %s\n", appSettings.dataLink.host.c_str());
         fflush(stdout);
         exit(1);
     }
     instrumentListenAddr.sin_addr.s_addr = instr_addr;
-    instrumentListenAddr.sin_port = htons(InstrumentListenPort);
+    instrumentListenAddr.sin_port = htons(DataLinkInstrumentListenPort);
 
     // Bind instrument panel socket
     if (bind(instrumentListenSockfd, (sockaddr*)&instrumentListenAddr, sizeof(instrumentListenAddr)) < 0) {
 #ifdef _WIN32
-        printf("Server failed to bind to instrument port %d: %d\n", InstrumentListenPort, WSAGetLastError());
+        printf("Server failed to bind to data link port %d: %d\n", DataLinkInstrumentListenPort, WSAGetLastError());
 #else
-        printf("Server failed to bind to instrument port %d: %s\n", InstrumentListenPort, strerror(errno));
+        printf("Server failed to bind to data link port %d: %s\n", DataLinkInstrumentListenPort, strerror(errno));
 #endif
         fflush(stdout);
         exit(1);
     }
     
-    printf("Successfully bound to instrument port %d on host %s\n", InstrumentListenPort, appSettings.instrumentPanel.host.c_str());
+    printf("Successfully bound to data link port %d on host %s\n", DataLinkInstrumentListenPort, appSettings.dataLink.host.c_str());
     fflush(stdout);
 
     deltaData = (char*)malloc(MaxDataSize);
@@ -1550,8 +1543,9 @@ void server()
     prevRadioData = (char*)malloc(MaxDataSize);
     prevLightsData = (char*)malloc(MaxDataSize);
 
-    printf("Server listening for instruments on port %d (responses on host %s port %d)\n", 
-           InstrumentListenPort, appSettings.instrumentPanel.host.c_str(), InstrumentResponsePort);
+    printf("Server listening for instrument panel requests on data link port %d\n", DataLinkInstrumentListenPort);
+    printf("Sending responses to instrument panel at %s:%d\n", 
+           appSettings.instrumentPanel.host.c_str(), InstrumentPanelListenPort);
     fflush(stdout);
 
     timeval timeout;
@@ -1576,9 +1570,9 @@ void server()
             printf("\n");
             fflush(stdout);
 
-            // Set response address and port
+            // Set response address and port to instrument panel's address and listen port
             inet_pton(AF_INET, appSettings.instrumentPanel.host.c_str(), &senderAddr.sin_addr);
-            senderAddr.sin_port = htons(InstrumentResponsePort);
+            senderAddr.sin_port = htons(InstrumentPanelListenPort);
             addrSize = socklen;
 
 #ifdef SHOW_NETWORK_USAGE
