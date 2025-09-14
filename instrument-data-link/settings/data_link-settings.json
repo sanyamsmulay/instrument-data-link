@@ -1,0 +1,17 @@
+{
+  "Data Link": {
+    "Host": "0.0.0.0",
+    "Port": 52021,
+    "Data Rate FPS": 1
+  },
+  "Instrument Panel": {
+    "Host": "192.168.1.138",
+    "Listen Port": 52021,
+    "Response Port": 52020
+  },
+  "Simulator Data": {
+    "Host": "127.0.0.1",
+    "Listen Port": 52022,
+    "Response port": 52023
+  }
+}

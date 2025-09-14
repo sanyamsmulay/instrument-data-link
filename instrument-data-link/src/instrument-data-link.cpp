@@ -51,11 +51,15 @@ typedef struct { size_t cbSize; RECT rcWindow; } WINDOWINFO;
 #include "jetbridge.h"
 #include "vjoy.h"
 #include "SimConnect.h"
+#include "settings.h"
 
- // Data will be served on this port
-const int InstrumentListenPort = 52021;  // Port for instrument panel requests
-const int InstrumentResponsePort = 52020;  // Port for instrument panel responses
-const int SimDataPort = 52022;  // Port for simulator data
+ // Data will be served on this port - loaded from settings
+int InstrumentListenPort = 52021;  // Port for instrument panel requests
+int InstrumentResponsePort = 52020;  // Port for instrument panel responses
+int SimDataPort = 52022;  // Port for simulator data
+
+// Settings
+AppSettings appSettings;
 
 // Change the next line to false if you always want to send
 // full data across the network rather than deltas.
@@ -178,9 +182,9 @@ int posSkip = 0;
 const int deltaDoubleSize = sizeof(DeltaDouble);
 const int deltaStringSize = sizeof(DeltaString);
 
-// Create server thread
+// Server thread
 void server();
-std::thread serverThread(server);
+std::thread* serverThread = nullptr;
 
 enum DEFINITION_ID {
     DEF_READ_ALL
@@ -751,8 +755,33 @@ void mapEvents()
     }
 }
 
+void loadAppSettings()
+{
+    // Load settings from JSON file
+    std::string settingsPath = "./settings/data_link-settings.json";
+    if (SettingsManager::loadSettings(settingsPath, appSettings)) {
+        printf("Settings loaded from: %s\n", settingsPath.c_str());
+    } else {
+        printf("Using default settings\n");
+    }
+    
+    // Apply settings to global variables
+    InstrumentListenPort = appSettings.instrumentPanel.listenPort;
+    InstrumentResponsePort = appSettings.instrumentPanel.responsePort;
+    SimDataPort = appSettings.simulatorData.port;
+    
+    printf("Configuration:\n");
+    printf("  Instrument Panel Host: %s\n", appSettings.instrumentPanel.host.c_str());
+    printf("  Instrument Listen Port: %d\n", InstrumentListenPort);
+    printf("  Instrument Response Port: %d\n", InstrumentResponsePort);
+    printf("  Simulator Data Host: %s:%d\n", appSettings.simulatorData.host.c_str(), appSettings.simulatorData.port);
+    printf("  Data Link Host: %s:%d\n", appSettings.dataLink.host.c_str(), appSettings.dataLink.port);
+    fflush(stdout);
+}
+
 void init()
 {
+    loadAppSettings();
     addReadDefs();
     mapEvents();
 
@@ -787,7 +816,11 @@ void cleanUp()
     }
 
     // Wait for server to quit
-    serverThread.join();
+    if (serverThread) {
+        serverThread->join();
+        delete serverThread;
+        serverThread = nullptr;
+    }
 
     WSACleanup();
     printf("Finished\n");
@@ -825,10 +858,16 @@ int main(int argc, char* argv[])
     printf("Instrument Data Link %s Copyright (c) 2024 Scott Vincent\n", versionString);
     printf("Instruments Data Size: %ld bytes\n", instrumentsDataSize);
     fflush(stdout);
+    
     printEnumValues();
-
-    // Yield so server can start
-    Sleep(100);
+    
+    // Initialize settings and variables first
+    init();
+    
+    // Create and start server thread
+    serverThread = new std::thread(server);
+    
+    printEnumValues();
 
 #ifdef _WIN32
     printf("Searching for local MS FS2020...\n");
@@ -863,7 +902,7 @@ int main(int argc, char* argv[])
             result = SimConnect_Open(&hSimConnect, "Instrument Data Link", NULL, 0, 0, 0);
             if (result == 0) {
                 printf("Connected to MS FS2020\n");
-                init();
+                // init();
                 simVars.connected = 1;
             }
             else {
@@ -897,7 +936,14 @@ int main(int argc, char* argv[])
     // Configure sim data socket
     memset(&simDataAddr, 0, sizeof(simDataAddr));
     simDataAddr.sin_family = AF_INET;
-    simDataAddr.sin_addr.s_addr = INADDR_ANY;
+    in_addr_t addr = inet_addr(appSettings.simulatorData.host.c_str());
+    if (addr == INADDR_NONE) {
+        printf("Invalid simulator data host address: %s\n", appSettings.simulatorData.host.c_str());
+        fflush(stdout);
+        close(simDataSockfd);
+        return 1;
+    }
+    simDataAddr.sin_addr.s_addr = addr;
     simDataAddr.sin_port = htons(SimDataPort);
 
     // Set socket reuse option
@@ -1475,7 +1521,13 @@ void server()
     // Bind instrument listening socket
     sockaddr_in instrumentListenAddr;
     instrumentListenAddr.sin_family = AF_INET;
-    instrumentListenAddr.sin_addr.s_addr = INADDR_ANY;
+    in_addr_t instr_addr = inet_addr(appSettings.instrumentPanel.host.c_str());
+    if (instr_addr == INADDR_NONE) {
+        printf("Invalid instrument panel host address: %s\n", appSettings.instrumentPanel.host.c_str());
+        fflush(stdout);
+        exit(1);
+    }
+    instrumentListenAddr.sin_addr.s_addr = instr_addr;
     instrumentListenAddr.sin_port = htons(InstrumentListenPort);
 
     // Bind instrument panel socket
@@ -1489,7 +1541,7 @@ void server()
         exit(1);
     }
     
-    printf("Successfully bound to instrument port %d (responses on port %d)\n", InstrumentListenPort, InstrumentResponsePort);
+    printf("Successfully bound to instrument port %d on host %s\n", InstrumentListenPort, appSettings.instrumentPanel.host.c_str());
     fflush(stdout);
 
     deltaData = (char*)malloc(MaxDataSize);
@@ -1498,8 +1550,9 @@ void server()
     prevRadioData = (char*)malloc(MaxDataSize);
     prevLightsData = (char*)malloc(MaxDataSize);
 
-    printf("Server listening for instruments on port %d (responses on port %d)\n", 
-           InstrumentListenPort, InstrumentResponsePort);
+    printf("Server listening for instruments on port %d (responses on host %s port %d)\n", 
+           InstrumentListenPort, appSettings.instrumentPanel.host.c_str(), InstrumentResponsePort);
+    fflush(stdout);
 
     timeval timeout;
     timeout.tv_sec = 0;
@@ -1523,7 +1576,8 @@ void server()
             printf("\n");
             fflush(stdout);
 
-            // Set response port
+            // Set response address and port
+            inet_pton(AF_INET, appSettings.instrumentPanel.host.c_str(), &senderAddr.sin_addr);
             senderAddr.sin_port = htons(InstrumentResponsePort);
             addrSize = socklen;
 
