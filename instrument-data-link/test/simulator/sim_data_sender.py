@@ -405,7 +405,7 @@ class SimDataSender:
                 altitude += vertical_speed * interval / 60  # Convert from feet/min to feet/interval
                 heading = (heading + 1) % 360  # Slowly turn
                 airspeed += (random.random() - 0.5) * 2  # Random speed variations
-                vertical_speed = math.sin(time.time() / 10) * 500  # Oscillating vertical speed
+                vertical_speed = math.sin(time.time() / 10) * 100  # Oscillating vertical speed
                 bank_angle = math.sin(time.time() / 10) * 10  # Oscillating bank angle
                 
                 # Construct data array matching the SimVars structure
